@@ -15,6 +15,34 @@ The primary runtime target is **Ubuntu on WSL2**. Windows is the host only; the 
 
 See [the architecture guide](docs/architecture.md) for the model suite, execution matrix, and measurement rules.
 
+## Current milestone: ONNX Runtime CUDA
+
+The ResNet-50 ONNX runner supports `cpu` (the default) and `cuda:0`. CUDA
+runs request `CUDAExecutionProvider` first, retain CPU fallback for unsupported
+operators, and synchronize the GPU before each host-side latency sample. The
+CUDA parity test allows small floating-point differences between GPU engines,
+while still requiring matching predicted classes.
+
+From the Ubuntu WSL2 environment, run:
+
+```bash
+PYTHONPATH=src python -m inference_bench.onnx_runner --device cuda:0
+```
+
+## Tests
+
+For concise, readable test output with timings, run:
+
+```bash
+python run_tests.py
+```
+
+The standard unittest command remains available when needed:
+
+```bash
+PYTHONPATH=src python -m unittest discover -s tests -v
+```
+
 ## Environment
 
 Create the environment from `environment.yml` **inside Ubuntu WSL2**:

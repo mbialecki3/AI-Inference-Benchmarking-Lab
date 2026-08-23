@@ -10,15 +10,15 @@ from inference_bench.onnx_export import (
     DEFAULT_OPSET_VERSION,
     INPUT_NAME,
     OUTPUT_NAME,
-    export_onnx,
 )
+from _support import export_onnx_quietly
 
 
 class OnnxExportTests(unittest.TestCase):
     def test_resnet50_export_is_structurally_valid(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             output_path = Path(temporary_directory) / "resnet50.onnx"
-            result = export_onnx("resnet50", output_path)
+            result = export_onnx_quietly("resnet50", output_path)
 
             exported_model = onnx.load(str(output_path))
             onnx.checker.check_model(exported_model)
