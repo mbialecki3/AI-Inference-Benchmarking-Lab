@@ -4,3 +4,7 @@ channels:
 dependencies:
   - python=3.12
   - pip
+  - pip:
+      # PyTorch's supported torch.export-based ONNX exporter requires this
+      # package in addition to ONNX itself.
+      - onnxscript
