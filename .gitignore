@@ -1,0 +1,17 @@
+# Local environments and generated benchmark artifacts
+.conda/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local agent state and generated codebase maps.
+.agent/
+graphify-out/
+
+# Benchmark outputs are reproducible from their configuration.
+artifacts/
+results/
+plots/
