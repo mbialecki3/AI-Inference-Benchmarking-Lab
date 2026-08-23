@@ -60,6 +60,21 @@ The framework records two different result families:
 - Artifact size is measured for the model file(s), including OpenVINO XML plus BIN.
 - Every result records hardware, drivers, package versions, git revision, configuration, and unavailable metrics.
 
+## Result-record contract
+
+Every completed warm-run benchmark writes a schema-versioned JSON record. The
+record has `runner`, `model`, `configuration`, `measurement`, `correctness`,
+and `environment` sections. `measurement.latency_ms.samples` preserves every
+warm-run observation, while its summary provides mean/min/max/p50/p95/p99;
+throughput is derived from that mean and the explicit batch size.
+
+The first record collector captures process peak RSS and before/after
+`nvidia-smi` samples when available. It stores a structured `unavailable`
+status otherwise. This prevents host-observability gaps from being confused
+with a successful zero-valued metric. ONNX Runtime records can additionally
+include parity against the seeded PyTorch reference; this is distinct from
+dataset-level task accuracy.
+
 ## Directory plan
 
 ```text

@@ -29,6 +29,31 @@ From the Ubuntu WSL2 environment, run:
 PYTHONPATH=src python -m inference_bench.onnx_runner --device cuda:0
 ```
 
+## Benchmark records
+
+`inference_bench.benchmark` wraps an existing runner in a shared, versioned
+record. It stores raw warm-run samples; mean, p50, p95, and p99 latency;
+throughput; process RSS; artifact size; package and driver metadata; and
+best-effort GPU telemetry. Missing host telemetry is recorded as
+`"unavailable"`; it never invalidates an otherwise valid CPU run.
+
+Run and save a PyTorch CPU record:
+
+```bash
+PYTHONPATH=src python -m inference_bench.benchmark --engine pytorch --device cpu
+```
+
+Run and save an ONNX Runtime CUDA record with an output-parity check against
+the corresponding PyTorch reference:
+
+```bash
+PYTHONPATH=src python -m inference_bench.benchmark --engine onnxruntime --device cuda:0 --verify-parity
+```
+
+Each command writes one JSON file under `results/` by default. The first
+benchmark scope is warm inference; cold process startup/model-load timing and
+device-only CUDA-event timing remain later measurement additions.
+
 ## Tests
 
 For concise, readable test output with timings, run:

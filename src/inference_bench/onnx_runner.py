@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
-import statistics
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +18,7 @@ import onnxruntime as ort
 import torch
 
 from inference_bench.inputs import DEFAULT_INPUT_SEED, make_input
+from inference_bench.metrics import LatencyMetrics
 from inference_bench.models import available_models
 from inference_bench.onnx_export import INPUT_NAME, OUTPUT_NAME
 
@@ -48,6 +47,7 @@ class OnnxRunResult:
     def summary(self) -> dict[str, object]:
         """Return JSON-friendly metadata without serializing the full output."""
 
+        latency = LatencyMetrics.from_samples(self.latencies_ms)
         return {
             "model": self.model_name,
             "model_path": str(self.model_path),
@@ -60,11 +60,7 @@ class OnnxRunResult:
             "output_shape": list(self.output.shape),
             "output_dtype": str(self.output.dtype),
             "output_sum": float(self.output.sum()),
-            "latency_ms": {
-                "mean": statistics.fmean(self.latencies_ms),
-                "p50": _percentile(self.latencies_ms, 50),
-                "p95": _percentile(self.latencies_ms, 95),
-            },
+            "latency_ms": latency.summary(),
         }
 
 
@@ -203,20 +199,6 @@ def _validate_iteration_counts(warmup_iterations: int, timed_iterations: int) ->
         or timed_iterations <= 0
     ):
         raise ValueError("timed_iterations must be a positive integer.")
-
-
-def _percentile(samples: tuple[float, ...], percentile: int) -> float:
-    """Compute a linearly interpolated percentile without another dependency."""
-
-    ordered = sorted(samples)
-    position = (len(ordered) - 1) * percentile / 100
-    lower_index = math.floor(position)
-    upper_index = math.ceil(position)
-    if lower_index == upper_index:
-        return ordered[lower_index]
-    lower_value = ordered[lower_index]
-    upper_value = ordered[upper_index]
-    return lower_value + (upper_value - lower_value) * (position - lower_index)
 
 
 def _parse_arguments() -> argparse.Namespace:
