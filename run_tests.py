@@ -33,6 +33,7 @@ def _friendly_name(test: unittest.case.TestCase) -> str:
         "OnnxExportTests": "ONNX export",
         "OnnxRunnerTests": "ONNX Runtime",
         "OpenVinoRunnerTests": "OpenVINO",
+        "InputArtifactTests": "input artifact",
         "PyTorchReferenceTests": "PyTorch reference",
         "PyTorchRunnerTests": "PyTorch runner",
     }.get(class_name, module_name.replace("_", " "))

@@ -80,6 +80,23 @@ precision there. ONNX Runtime and OpenVINO records can additionally include
 parity against the seeded PyTorch reference; this is distinct from dataset-
 level task accuracy.
 
+### Native C++ boundary
+
+The initial native ONNX Runtime CPU runner reads the same ONNX artifact and
+validates the same `images`/`logits` names, float32 types, and static
+`[1,3,224,224]`/`[1,1000]` shapes as the Python runner. To preserve exact
+cross-language inputs, Python writes its seeded tensor as a little-endian
+float32 binary artifact; C++ reads those bytes rather than attempting to
+reproduce PyTorch's random-number generator. This input artifact is synthetic
+parity data, never a validation dataset.
+
+Native C++ CPU output is schema-versioned JSON with the same `runner`,
+`model`, `configuration`, `measurement`, `correctness`, and `environment`
+sections. It records raw latency samples and the same interpolated p50/p95/p99
+calculation. Its initial correctness field is `null` until a portable saved
+PyTorch-output artifact is introduced; this is intentionally not represented
+as task accuracy or successful parity.
+
 ## Directory plan
 
 ```text

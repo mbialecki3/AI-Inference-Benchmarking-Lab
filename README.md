@@ -15,7 +15,48 @@ The primary runtime target is **Ubuntu on WSL2**. Windows is the host only; the 
 
 See [the architecture guide](docs/architecture.md) for the model suite, execution matrix, and measurement rules.
 
-## Current milestone: OpenVINO CPU
+## Current milestone: native ONNX Runtime C++ CPU
+
+The C++ track now begins with a native ONNX Runtime CPU runner and CMake
+scaffolding. It consumes the same validated `images` → `logits` ONNX artifact,
+uses the existing warm-run protocol (5 warmups and 20 timed synchronous
+requests by default), verifies float32 `NCHW [1,3,224,224]` input and float32
+`[1,1000]` logits, and emits the schema-v1 measurement sections used by the
+Python benchmark records. The initial C++ result intentionally leaves parity
+as `null`; parity will be added once the native result collector can load a
+saved PyTorch reference output.
+
+Generate the exact seeded bytes used by the Python runners. This avoids trying
+to duplicate PyTorch's RNG behavior in C++:
+
+```bash
+PYTHONPATH=src python -m inference_bench.input_artifact
+```
+
+Download/extract the ONNX Runtime C/C++ release matching the validated
+runtime (currently 1.29.x), then configure and build from Ubuntu WSL2:
+
+```bash
+cmake -S . -B build/cpp -DONNXRUNTIME_ROOT=/opt/onnxruntime-linux-x64-1.29.0
+cmake --build build/cpp --parallel
+./build/cpp/cpp/onnxruntime_cpu_runner \
+  --model-path artifacts/resnet50.onnx \
+  --input-file artifacts/inputs/resnet50_seed69420_f32_nchw.bin
+```
+
+`ONNXRUNTIME_ROOT` must contain `include/onnxruntime_cxx_api.h` and `lib/` (or
+`lib64/`) with the ONNX Runtime shared library. Keep that release alongside
+the Python `onnxruntime-gpu==1.29.0` pin so CPU results remain attributable to
+the same runtime generation. CMake intentionally does not download a runtime:
+the release path is explicit and reviewable. On Linux, set
+`LD_LIBRARY_PATH` to the release's `lib/` directory if the dynamic loader
+cannot locate `libonnxruntime.so`.
+
+The CMake root is deliberately extensible: later native CUDA and OpenVINO
+targets will become sibling targets under `cpp/`, without changing the shared
+artifact, input, or result-record boundary.
+
+## Python OpenVINO CPU milestone
 
 The OpenVINO runner loads the validated ResNet-50 ONNX artifact and compiles it
 explicitly for `CPU`. It uses the same seeded float32 NCHW input as the

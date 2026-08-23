@@ -15,3 +15,6 @@ graphify-out/
 artifacts/
 results/
 plots/
+
+# CMake configure/build trees are generated per host/toolchain.
+build/
