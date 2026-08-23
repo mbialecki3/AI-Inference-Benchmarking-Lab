@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 from uuid import uuid4
 
 import numpy as np
@@ -78,6 +78,7 @@ class BenchmarkResult:
     environment: dict[str, Any]
     gpu_telemetry_before: dict[str, object]
     gpu_telemetry_after: dict[str, object]
+    engine_configuration: dict[str, Any] = field(default_factory=dict)
     parity: OutputParity | None = None
 
     @classmethod
@@ -99,6 +100,7 @@ class BenchmarkResult:
         environment: dict[str, Any],
         gpu_telemetry_before: dict[str, object],
         gpu_telemetry_after: dict[str, object],
+        engine_configuration: Mapping[str, Any] | None = None,
         parity: OutputParity | None = None,
     ) -> "BenchmarkResult":
         """Create a result with a stable id, UTC timestamp, and derived metrics."""
@@ -126,6 +128,7 @@ class BenchmarkResult:
             environment=environment,
             gpu_telemetry_before=gpu_telemetry_before,
             gpu_telemetry_after=gpu_telemetry_after,
+            engine_configuration=dict(engine_configuration or {}),
             parity=parity,
         )
 
@@ -141,6 +144,7 @@ class BenchmarkResult:
                 "engine": self.engine,
                 "device": self.device,
                 "active_providers": list(self.active_providers),
+                "configuration": self.engine_configuration,
             },
             "model": {
                 "name": self.model_name,

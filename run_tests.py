@@ -22,6 +22,7 @@ def _friendly_name(test: unittest.case.TestCase) -> str:
     label = name.replace("_", " ")
     for source, replacement in {
         "onnx": "ONNX",
+        "openvino": "OpenVINO",
         "pytorch": "PyTorch",
         "resnet50": "ResNet-50",
         "cuda": "CUDA",
@@ -31,6 +32,7 @@ def _friendly_name(test: unittest.case.TestCase) -> str:
     area = {
         "OnnxExportTests": "ONNX export",
         "OnnxRunnerTests": "ONNX Runtime",
+        "OpenVinoRunnerTests": "OpenVINO",
         "PyTorchReferenceTests": "PyTorch reference",
         "PyTorchRunnerTests": "PyTorch runner",
     }.get(class_name, module_name.replace("_", " "))

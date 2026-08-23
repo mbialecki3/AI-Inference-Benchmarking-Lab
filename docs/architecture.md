@@ -55,9 +55,12 @@ The framework records two different result families:
 - A cold subprocess result reports process startup and model-load time.
 - Warm runs report per-request latency percentiles (p50/p95/p99) after warm-up and synchronized CUDA timing.
 - GPU timing uses CUDA events and synchronization. We will separately report end-to-end latency (including host-to-device transfer) and device-only latency, because they answer different deployment questions.
+- The OpenVINO CPU parity runner explicitly selects float32 inference precision. Lower-precision OpenVINO optimizations are valuable later configurations, but they must not be mixed into a reference-equivalence result.
 - Throughput is samples per second at an explicit batch size.
 - Process RSS, GPU memory, CPU/GPU utilization, and NVIDIA power are sampled independently of the timed inference loop.
-- Artifact size is measured for the model file(s), including OpenVINO XML plus BIN.
+- Artifact size is measured for the model file(s) consumed by a runner. The
+  initial OpenVINO path consumes ONNX; a later OpenVINO-IR path will measure
+  the XML and BIN together.
 - Every result records hardware, drivers, package versions, git revision, configuration, and unavailable metrics.
 
 ## Result-record contract
@@ -71,9 +74,11 @@ throughput is derived from that mean and the explicit batch size.
 The first record collector captures process peak RSS and before/after
 `nvidia-smi` samples when available. It stores a structured `unavailable`
 status otherwise. This prevents host-observability gaps from being confused
-with a successful zero-valued metric. ONNX Runtime records can additionally
-include parity against the seeded PyTorch reference; this is distinct from
-dataset-level task accuracy.
+with a successful zero-valued metric. Engine-specific configuration belongs in
+`runner.configuration`; for example, OpenVINO records its `f32` inference
+precision there. ONNX Runtime and OpenVINO records can additionally include
+parity against the seeded PyTorch reference; this is distinct from dataset-
+level task accuracy.
 
 ## Directory plan
 

@@ -15,18 +15,19 @@ The primary runtime target is **Ubuntu on WSL2**. Windows is the host only; the 
 
 See [the architecture guide](docs/architecture.md) for the model suite, execution matrix, and measurement rules.
 
-## Current milestone: ONNX Runtime CUDA
+## Current milestone: OpenVINO CPU
 
-The ResNet-50 ONNX runner supports `cpu` (the default) and `cuda:0`. CUDA
-runs request `CUDAExecutionProvider` first, retain CPU fallback for unsupported
-operators, and synchronize the GPU before each host-side latency sample. The
-CUDA parity test allows small floating-point differences between GPU engines,
-while still requiring matching predicted classes.
+The OpenVINO runner loads the validated ResNet-50 ONNX artifact and compiles it
+explicitly for `CPU`. It uses the same seeded float32 NCHW input as the
+PyTorch and ONNX Runtime runners, validates the `images`/`logits` interface,
+and records the execution device reported by OpenVINO. The runner explicitly
+requests float32 inference precision: this keeps parity checks about engine
+semantics rather than lower-precision CPU optimizations.
 
 From the Ubuntu WSL2 environment, run:
 
 ```bash
-PYTHONPATH=src python -m inference_bench.onnx_runner --device cuda:0
+PYTHONPATH=src python -m inference_bench.openvino_runner --device cpu
 ```
 
 ## Benchmark records
@@ -50,9 +51,17 @@ the corresponding PyTorch reference:
 PYTHONPATH=src python -m inference_bench.benchmark --engine onnxruntime --device cuda:0 --verify-parity
 ```
 
+Run and save an OpenVINO CPU record with the same parity check:
+
+```bash
+PYTHONPATH=src python -m inference_bench.benchmark --engine openvino --device cpu --verify-parity
+```
+
 Each command writes one JSON file under `results/` by default. The first
 benchmark scope is warm inference; cold process startup/model-load timing and
-device-only CUDA-event timing remain later measurement additions.
+device-only CUDA-event timing remain later measurement additions. Engine-
+specific settings, including OpenVINO's `inference_precision: f32`, are stored
+under `runner.configuration` in every result record.
 
 ## Tests
 
@@ -77,7 +86,10 @@ conda env create -f environment.yml
 conda activate inference-bench
 ```
 
-Python packages for an engine are added only in the stage that uses it. This keeps compatibility failures easy to identify and makes results reproducible. The earlier Windows environment remains isolated but is no longer the benchmark target.
+The file pins the tested direct Python dependencies, including the official
+CUDA 13.2 PyTorch wheel index and OpenVINO for the CPU runner. The earlier
+Windows environment remains isolated; a fresh environment is intended for the
+WSL2/Linux benchmark target.
 
 ## TensorFlow scope
 
