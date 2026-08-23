@@ -16,6 +16,7 @@ import numpy as np
 
 from inference_bench.inputs import DEFAULT_INPUT_SEED, make_input
 from inference_bench.models import available_models
+from inference_bench.pytorch_runner import DEFAULT_MODEL_SEED, run_pytorch
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +38,33 @@ class InputArtifact:
             "output_path": str(self.output_path),
             "input_shape": list(self.input_shape),
             "input_seed": self.input_seed,
+            "dtype": self.dtype,
+            "byte_order": "little-endian",
+            "size_bytes": self.size_bytes,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ReferenceOutputArtifact:
+    """Metadata for portable PyTorch logits used by native parity checks."""
+
+    model_name: str
+    output_path: Path
+    output_shape: tuple[int, ...]
+    input_seed: int
+    model_seed: int
+    dtype: str
+    size_bytes: int
+
+    def summary(self) -> dict[str, object]:
+        """Return the cross-language reference-output contract as metadata."""
+
+        return {
+            "model": self.model_name,
+            "output_path": str(self.output_path),
+            "output_shape": list(self.output_shape),
+            "input_seed": self.input_seed,
+            "model_seed": self.model_seed,
             "dtype": self.dtype,
             "byte_order": "little-endian",
             "size_bytes": self.size_bytes,
@@ -79,6 +107,43 @@ def export_input_artifact(
     )
 
 
+def export_reference_output_artifact(
+    model_name: str,
+    output_path: Path | str,
+    *,
+    input_seed: int = DEFAULT_INPUT_SEED,
+    model_seed: int = DEFAULT_MODEL_SEED,
+) -> ReferenceOutputArtifact:
+    """Write deterministic CPU PyTorch logits as little-endian float32 bytes.
+
+    The artifact is paired with :func:`export_input_artifact`: native runners
+    consume the same input bytes and compare their output to these exact
+    reference logits. It represents numerical parity, never task accuracy.
+    """
+
+    destination = Path(output_path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    reference = run_pytorch(
+        model_name,
+        device="cpu",
+        input_seed=input_seed,
+        model_seed=model_seed,
+        warmup_iterations=0,
+        timed_iterations=1,
+    )
+    values = np.ascontiguousarray(reference.output.numpy(), dtype="<f4")
+    values.tofile(destination)
+    return ReferenceOutputArtifact(
+        model_name=model_name,
+        output_path=destination,
+        output_shape=tuple(values.shape),
+        input_seed=input_seed,
+        model_seed=model_seed,
+        dtype="float32",
+        size_bytes=destination.stat().st_size,
+    )
+
+
 def _parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Write a deterministic float32 NCHW input binary for native runners."
@@ -89,8 +154,15 @@ def _parse_arguments() -> argparse.Namespace:
         type=Path,
         default=Path("artifacts/inputs/resnet50_seed69420_f32_nchw.bin"),
     )
+    parser.add_argument(
+        "--reference-output",
+        type=Path,
+        default=Path("artifacts/reference_outputs/resnet50_seed67_input69420_f32_logits.bin"),
+        help="Path for deterministic PyTorch float32 logits used by native parity checks.",
+    )
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--input-seed", type=int, default=DEFAULT_INPUT_SEED)
+    parser.add_argument("--model-seed", type=int, default=DEFAULT_MODEL_SEED)
     return parser.parse_args()
 
 
@@ -104,7 +176,13 @@ def main() -> None:
         batch_size=arguments.batch_size,
         input_seed=arguments.input_seed,
     )
-    print(json.dumps(artifact.summary(), indent=2))
+    reference = export_reference_output_artifact(
+        arguments.model,
+        arguments.reference_output,
+        input_seed=arguments.input_seed,
+        model_seed=arguments.model_seed,
+    )
+    print(json.dumps({"input": artifact.summary(), "reference_output": reference.summary()}, indent=2))
 
 
 if __name__ == "__main__":

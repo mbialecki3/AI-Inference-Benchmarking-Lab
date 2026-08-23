@@ -15,19 +15,21 @@ The primary runtime target is **Ubuntu on WSL2**. Windows is the host only; the 
 
 See [the architecture guide](docs/architecture.md) for the model suite, execution matrix, and measurement rules.
 
-## Current milestone: native ONNX Runtime C++ CPU
+## Current milestone: native ONNX Runtime C++ CPU and CUDA
 
 The C++ track now begins with a native ONNX Runtime CPU runner and CMake
 scaffolding. It consumes the same validated `images` → `logits` ONNX artifact,
 uses the existing warm-run protocol (5 warmups and 20 timed synchronous
 requests by default), verifies float32 `NCHW [1,3,224,224]` input and float32
 `[1,1000]` logits, and emits the schema-v1 measurement sections used by the
-Python benchmark records. The initial C++ result intentionally leaves parity
-as `null`; parity will be added once the native result collector can load a
-saved PyTorch reference output.
+Python benchmark records. The artifact command also saves deterministic
+PyTorch CPU logits. Both native runners compare their final logits with that
+reference and record maximum absolute/relative error plus predicted-class
+agreement. This is a runner correctness check, not a dataset-accuracy metric.
 
-Generate the exact seeded bytes used by the Python runners. This avoids trying
-to duplicate PyTorch's RNG behavior in C++:
+Generate the exact seeded input and reference-output bytes used by the Python
+runners. This avoids trying to duplicate PyTorch's RNG behavior or model
+initialization in C++:
 
 ```bash
 PYTHONPATH=src python -m inference_bench.input_artifact
@@ -41,7 +43,8 @@ cmake -S . -B build/cpp -DONNXRUNTIME_ROOT=/opt/onnxruntime-linux-x64-1.29.0
 cmake --build build/cpp --parallel
 ./build/cpp/cpp/onnxruntime_cpu_runner \
   --model-path artifacts/resnet50.onnx \
-  --input-file artifacts/inputs/resnet50_seed69420_f32_nchw.bin
+  --input-file artifacts/inputs/resnet50_seed69420_f32_nchw.bin \
+  --reference-output artifacts/reference_outputs/resnet50_seed67_input69420_f32_logits.bin
 ```
 
 `ONNXRUNTIME_ROOT` must contain `include/onnxruntime_cxx_api.h` and `lib/` (or
@@ -52,9 +55,47 @@ the release path is explicit and reviewable. On Linux, set
 `LD_LIBRARY_PATH` to the release's `lib/` directory if the dynamic loader
 cannot locate `libonnxruntime.so`.
 
-The CMake root is deliberately extensible: later native CUDA and OpenVINO
-targets will become sibling targets under `cpp/`, without changing the shared
-artifact, input, or result-record boundary.
+### Native ONNX Runtime CUDA
+
+The CUDA executable uses ONNX Runtime's CUDA execution provider on device 0.
+It synchronizes CUDA after every warm and timed request, so each latency sample
+includes completed GPU work rather than only asynchronous kernel submission.
+It also samples `nvidia-smi` immediately before and after the timed loop. The
+provider uses the same reference-logit artifact as the CPU runner; GPU and CPU
+floating-point reductions may differ numerically, so inspect the error fields
+alongside prediction agreement.
+
+The C++ SDK supplies headers, while a matching GPU-enabled ONNX Runtime
+distribution supplies the CUDA provider plug-ins. Point CMake at both, plus
+the CUDA runtime and cuDNN roots. In the configured WSL2 environment these
+are provided by the installed packages:
+
+```bash
+ORT_SDK=/home/mitch/opt/onnxruntime-linux-x64-1.29.0
+ORT_GPU_LIB=$CONDA_PREFIX/lib/python3.12/site-packages/onnxruntime/capi
+CUDA_RUNTIME_ROOT=$CONDA_PREFIX/lib/python3.12/site-packages/nvidia/cu13
+CUDNN_ROOT=$CONDA_PREFIX/lib/python3.12/site-packages/nvidia/cudnn
+
+cmake -S . -B build/cpp-cuda \
+  -DINFERENCE_BENCH_BUILD_ONNXRUNTIME_CPU=OFF \
+  -DINFERENCE_BENCH_BUILD_ONNXRUNTIME_CUDA=ON \
+  -DONNXRUNTIME_ROOT="$ORT_SDK" \
+  -DONNXRUNTIME_LIBRARY_DIR="$ORT_GPU_LIB" \
+  -DCUDA_RUNTIME_ROOT="$CUDA_RUNTIME_ROOT" \
+  -DCUDNN_ROOT="$CUDNN_ROOT"
+cmake --build build/cpp-cuda --parallel
+
+export LD_LIBRARY_PATH="build/cpp-cuda/cpp:$ORT_GPU_LIB:$CUDA_RUNTIME_ROOT/lib:$CUDNN_ROOT/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+./build/cpp-cuda/cpp/onnxruntime_cuda_runner \
+  --model-path artifacts/resnet50.onnx \
+  --input-file artifacts/inputs/resnet50_seed69420_f32_nchw.bin \
+  --reference-output artifacts/reference_outputs/resnet50_seed67_input69420_f32_logits.bin
+```
+
+The CUDA target creates build-local symlinks to the requested runtime and
+provider libraries; it does not copy vendor binaries into the repository or
+modify the Conda environment. The CPU target remains separately buildable on
+hosts without CUDA.
 
 ## Python OpenVINO CPU milestone
 

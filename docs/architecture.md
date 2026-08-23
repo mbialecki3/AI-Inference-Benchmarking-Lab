@@ -90,12 +90,21 @@ float32 binary artifact; C++ reads those bytes rather than attempting to
 reproduce PyTorch's random-number generator. This input artifact is synthetic
 parity data, never a validation dataset.
 
-Native C++ CPU output is schema-versioned JSON with the same `runner`,
+Native C++ CPU and CUDA output are schema-versioned JSON with the same `runner`,
 `model`, `configuration`, `measurement`, `correctness`, and `environment`
 sections. It records raw latency samples and the same interpolated p50/p95/p99
-calculation. Its initial correctness field is `null` until a portable saved
-PyTorch-output artifact is introduced; this is intentionally not represented
-as task accuracy or successful parity.
+calculation. Python also saves the matching seeded PyTorch CPU logits as a
+little-endian float32 artifact. Native runners load those logits and record
+maximum absolute error, maximum relative error, and predicted-class agreement.
+This is intentionally not represented as task accuracy.
+
+The CUDA variant appends ONNX Runtime's CUDA execution provider for device 0
+before creating its session, synchronizes after every warm and timed request,
+and samples `nvidia-smi` before and after the timed loop. The C++ SDK and a
+matching GPU-enabled ONNX Runtime distribution are separate inputs because the
+provider is a dynamically loaded plug-in. CMake keeps the required loader
+symlinks in the ignored build tree rather than copying or modifying vendor
+libraries.
 
 ## Directory plan
 

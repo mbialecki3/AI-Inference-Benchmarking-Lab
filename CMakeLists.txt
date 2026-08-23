@@ -8,6 +8,12 @@ option(
     ON
 )
 
-if(INFERENCE_BENCH_BUILD_ONNXRUNTIME_CPU)
+option(
+    INFERENCE_BENCH_BUILD_ONNXRUNTIME_CUDA
+    "Build the native ONNX Runtime CUDA benchmark runner."
+    OFF
+)
+
+if(INFERENCE_BENCH_BUILD_ONNXRUNTIME_CPU OR INFERENCE_BENCH_BUILD_ONNXRUNTIME_CUDA)
     add_subdirectory(cpp)
 endif()

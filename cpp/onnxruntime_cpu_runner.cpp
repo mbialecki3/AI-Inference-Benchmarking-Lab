@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
@@ -31,12 +32,25 @@
 #include <utility>
 #include <vector>
 
+#if defined(INFERENCE_BENCH_CUDA_RUNNER)
+// The CUDA runtime ABI is stable for these calls. Declaring this tiny surface
+// locally lets the runner use pip-distributed CUDA runtime libraries, whose
+// headers omit NVCC-only internal headers needed by cuda_runtime_api.h.
+using cudaError_t = int;
+constexpr cudaError_t cudaSuccess = 0;
+extern "C" cudaError_t cudaDeviceSynchronize();
+extern "C" cudaError_t cudaGetDeviceCount(int* count);
+extern "C" const char* cudaGetErrorString(cudaError_t error);
+extern "C" cudaError_t cudaRuntimeGetVersion(int* runtime_version);
+#endif
+
 namespace {
 
 constexpr std::string_view kModelName = "resnet50";
 constexpr std::string_view kInputName = "images";
 constexpr std::string_view kOutputName = "logits";
 constexpr std::int64_t kDefaultInputSeed = 69420;
+constexpr std::int64_t kDefaultModelSeed = 67;
 constexpr int kDefaultWarmupIterations = 5;
 constexpr int kDefaultTimedIterations = 20;
 constexpr std::array<std::int64_t, 4> kInputShape{1, 3, 224, 224};
@@ -45,7 +59,10 @@ constexpr std::array<std::int64_t, 2> kOutputShape{1, 1000};
 struct Options {
     std::filesystem::path model_path{"artifacts/resnet50.onnx"};
     std::filesystem::path input_file;
+    std::filesystem::path reference_output_file{
+        "artifacts/reference_outputs/resnet50_seed67_input69420_f32_logits.bin"};
     std::int64_t input_seed{kDefaultInputSeed};
+    std::int64_t model_seed{kDefaultModelSeed};
     int warmup_iterations{kDefaultWarmupIterations};
     int timed_iterations{kDefaultTimedIterations};
 };
@@ -59,6 +76,22 @@ struct LatencySummary {
     double p95_ms{};
     double p99_ms{};
 };
+
+struct OutputParity {
+    double max_absolute_error{};
+    double max_relative_error{};
+    double prediction_agreement{};
+};
+
+#if defined(INFERENCE_BENCH_CUDA_RUNNER)
+constexpr std::string_view kRunnerExecutable = "onnxruntime_cuda_runner";
+constexpr std::string_view kRunnerDevice = "cuda:0";
+constexpr std::string_view kPrimaryProvider = "CUDAExecutionProvider";
+#else
+constexpr std::string_view kRunnerExecutable = "onnxruntime_cpu_runner";
+constexpr std::string_view kRunnerDevice = "cpu";
+constexpr std::string_view kPrimaryProvider = "CPUExecutionProvider";
+#endif
 
 [[noreturn]] void fail(const std::string& message) {
     throw std::runtime_error(message);
@@ -100,16 +133,19 @@ std::int64_t parse_int64(std::string_view value, std::string_view option) {
 }
 
 void print_usage(std::ostream& stream) {
-    stream << "Usage: onnxruntime_cpu_runner --input-file PATH [options]\n"
+    stream << "Usage: " << kRunnerExecutable << " --input-file PATH [options]\n"
            << "\n"
-           << "Runs the validated ResNet-50 ONNX artifact with ONNX Runtime's CPU provider.\n"
+           << "Runs the validated ResNet-50 ONNX artifact with ONNX Runtime's "
+           << kPrimaryProvider << ".\n"
            << "The input file must be the float32 NCHW binary emitted by\n"
            << "python -m inference_bench.input_artifact.\n"
            << "\n"
            << "Options:\n"
            << "  --model-path PATH    ONNX artifact (default: artifacts/resnet50.onnx)\n"
            << "  --input-file PATH    Required deterministic float32 input binary\n"
+           << "  --reference-output PATH  PyTorch float32 logits for numerical parity\n"
            << "  --input-seed N       Metadata only; must match input artifact (default: 69420)\n"
+           << "  --model-seed N       PyTorch seed used for reference logits (default: 67)\n"
            << "  --warmup N           Warm synchronous inferences (default: 5)\n"
            << "  --iterations N       Timed synchronous inferences (default: 20)\n"
            << "  --help               Show this help text\n";
@@ -132,8 +168,12 @@ Options parse_arguments(int argc, char* argv[]) {
             options.model_path = require_value(index, argc, argv, argument);
         } else if (argument == "--input-file") {
             options.input_file = require_value(index, argc, argv, argument);
+        } else if (argument == "--reference-output") {
+            options.reference_output_file = require_value(index, argc, argv, argument);
         } else if (argument == "--input-seed") {
             options.input_seed = parse_int64(require_value(index, argc, argv, argument), argument);
+        } else if (argument == "--model-seed") {
+            options.model_seed = parse_int64(require_value(index, argc, argv, argument), argument);
         } else if (argument == "--warmup") {
             options.warmup_iterations = parse_positive_int(require_value(index, argc, argv, argument), argument, true);
         } else if (argument == "--iterations") {
@@ -172,6 +212,30 @@ std::vector<float> read_input_file(const std::filesystem::path& path) {
     stream.read(reinterpret_cast<char*>(values.data()), static_cast<std::streamsize>(actual_bytes));
     if (!stream || stream.gcount() != static_cast<std::streamsize>(actual_bytes)) {
         fail("Could not read the complete input file: " + path.string());
+    }
+    return values;
+}
+
+std::vector<float> read_reference_output_file(const std::filesystem::path& path) {
+    if constexpr (std::endian::native != std::endian::little) {
+        fail("The native runner currently requires a little-endian host.");
+    }
+    if (!std::filesystem::is_regular_file(path)) {
+        fail("Reference-output file does not exist: " + path.string());
+    }
+    const auto expected_elements = static_cast<std::size_t>(kOutputShape[0] * kOutputShape[1]);
+    const auto expected_bytes = expected_elements * sizeof(float);
+    const auto actual_bytes = std::filesystem::file_size(path);
+    if (actual_bytes != expected_bytes) {
+        fail("Reference-output file has " + std::to_string(actual_bytes) + " bytes; expected "
+             + std::to_string(expected_bytes) + " for float32 logits [1,1000].");
+    }
+
+    std::vector<float> values(expected_elements);
+    std::ifstream stream(path, std::ios::binary);
+    stream.read(reinterpret_cast<char*>(values.data()), static_cast<std::streamsize>(actual_bytes));
+    if (!stream || stream.gcount() != static_cast<std::streamsize>(actual_bytes)) {
+        fail("Could not read the complete reference-output file: " + path.string());
     }
     return values;
 }
@@ -235,6 +299,67 @@ void validate_output(const std::vector<Ort::Value>& outputs) {
     }
 }
 
+OutputParity compare_outputs(std::span<const float> reference, std::span<const float> candidate) {
+    if (reference.size() != candidate.size() || reference.empty()) {
+        fail("Reference and candidate logits must have the same non-zero size.");
+    }
+    double max_absolute_error{};
+    double max_relative_error{};
+    std::size_t reference_index{};
+    std::size_t candidate_index{};
+    for (std::size_t index = 0; index < reference.size(); ++index) {
+        const double reference_value = static_cast<double>(reference[index]);
+        const double candidate_value = static_cast<double>(candidate[index]);
+        const double absolute_error = std::abs(candidate_value - reference_value);
+        max_absolute_error = std::max(max_absolute_error, absolute_error);
+        max_relative_error = std::max(
+            max_relative_error,
+            absolute_error / std::max(std::abs(reference_value), 1.0e-12));
+        if (reference[index] > reference[reference_index]) {
+            reference_index = index;
+        }
+        if (candidate[index] > candidate[candidate_index]) {
+            candidate_index = index;
+        }
+    }
+    return {max_absolute_error, max_relative_error, reference_index == candidate_index ? 1.0 : 0.0};
+}
+
+void configure_session(Ort::SessionOptions& session_options) {
+    session_options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+#if defined(INFERENCE_BENCH_CUDA_RUNNER)
+    int device_count{};
+    const auto device_count_status = cudaGetDeviceCount(&device_count);
+    if (device_count_status != cudaSuccess || device_count < 1) {
+        fail("CUDA device 0 is unavailable: " + std::string(cudaGetErrorString(device_count_status)));
+    }
+    OrtCUDAProviderOptions cuda_options{};
+    cuda_options.device_id = 0;
+    Ort::ThrowOnError(Ort::GetApi().SessionOptionsAppendExecutionProvider_CUDA(
+        session_options, &cuda_options));
+#endif
+}
+
+void synchronize_device() {
+#if defined(INFERENCE_BENCH_CUDA_RUNNER)
+    const auto status = cudaDeviceSynchronize();
+    if (status != cudaSuccess) {
+        fail("CUDA synchronization failed: " + std::string(cudaGetErrorString(status)));
+    }
+#endif
+}
+
+#if defined(INFERENCE_BENCH_CUDA_RUNNER)
+int cuda_runtime_version() {
+    int version{};
+    const auto status = cudaRuntimeGetVersion(&version);
+    if (status != cudaSuccess) {
+        fail("Could not read the CUDA runtime version: " + std::string(cudaGetErrorString(status)));
+    }
+    return version;
+}
+#endif
+
 double percentile(std::vector<double> values, double percentile_value) {
     std::sort(values.begin(), values.end());
     const double position = (static_cast<double>(values.size()) - 1.0) * percentile_value / 100.0;
@@ -291,6 +416,77 @@ std::optional<std::uint64_t> process_rss_bytes() {
     return std::nullopt;
 }
 
+std::string json_escape(const std::string& value);
+
+struct GpuTelemetry {
+    bool available{};
+    std::string name;
+    std::string driver_version;
+    std::optional<double> memory_used_mib;
+    std::optional<double> utilization_percent;
+    std::optional<double> power_watts;
+    std::string reason;
+};
+
+#if defined(INFERENCE_BENCH_CUDA_RUNNER)
+std::string trim(std::string value) {
+    const auto first = value.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) {
+        return {};
+    }
+    const auto last = value.find_last_not_of(" \t\r\n");
+    return value.substr(first, last - first + 1);
+}
+
+std::optional<double> optional_double(const std::string& value) {
+    try {
+        std::size_t consumed{};
+        const double parsed = std::stod(value, &consumed);
+        if (consumed == value.size()) {
+            return parsed;
+        }
+    } catch (const std::exception&) {
+    }
+    return std::nullopt;
+}
+#endif
+
+GpuTelemetry sample_gpu_telemetry() {
+#if defined(INFERENCE_BENCH_CUDA_RUNNER) && defined(__linux__)
+    constexpr const char* command =
+        "nvidia-smi --id=0 --query-gpu=name,driver_version,memory.used,utilization.gpu,power.draw "
+        "--format=csv,noheader,nounits";
+    FILE* pipe = popen(command, "r");
+    if (pipe == nullptr) {
+        return {false, {}, {}, std::nullopt, std::nullopt, std::nullopt,
+                "nvidia-smi could not be started"};
+    }
+    std::array<char, 1024> buffer{};
+    std::string line;
+    if (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe) != nullptr) {
+        line = buffer.data();
+    }
+    const int status = pclose(pipe);
+    if (status != 0 || line.empty()) {
+        return {false, {}, {}, std::nullopt, std::nullopt, std::nullopt,
+                "nvidia-smi did not return telemetry for CUDA device 0"};
+    }
+    std::array<std::string, 5> fields;
+    std::istringstream stream(line);
+    for (std::size_t index = 0; index < fields.size(); ++index) {
+        if (!std::getline(stream, fields[index], ',')) {
+            return {false, {}, {}, std::nullopt, std::nullopt, std::nullopt,
+                    "nvidia-smi returned an unexpected telemetry format"};
+        }
+        fields[index] = trim(std::move(fields[index]));
+    }
+    return {true, fields[0], fields[1], optional_double(fields[2]), optional_double(fields[3]),
+            optional_double(fields[4]), {}};
+#else
+    return {false, {}, {}, std::nullopt, std::nullopt, std::nullopt, "CPU runner"};
+#endif
+}
+
 std::string json_escape(const std::string& value) {
     std::ostringstream escaped;
     for (const unsigned char character : value) {
@@ -318,6 +514,31 @@ void write_number(std::ostream& stream, double value) {
     stream << std::setprecision(12) << value;
 }
 
+void write_optional_number(std::ostream& stream, const std::optional<double>& value) {
+    if (value) {
+        write_number(stream, *value);
+    } else {
+        stream << "null";
+    }
+}
+
+void write_gpu_telemetry(std::ostream& stream, const GpuTelemetry& telemetry) {
+    if (!telemetry.available) {
+        stream << "{\"status\": \"unavailable\", \"reason\": \""
+               << json_escape(telemetry.reason) << "\"}";
+        return;
+    }
+    stream << "{\"status\": \"available\", \"gpus\": [{\"name\": \""
+           << json_escape(telemetry.name) << "\", \"driver_version\": \""
+           << json_escape(telemetry.driver_version) << "\", \"memory_used_mib\": ";
+    write_optional_number(stream, telemetry.memory_used_mib);
+    stream << ", \"utilization_percent\": ";
+    write_optional_number(stream, telemetry.utilization_percent);
+    stream << ", \"power_watts\": ";
+    write_optional_number(stream, telemetry.power_watts);
+    stream << "}]}";
+}
+
 void write_latency_array(std::ostream& stream, const std::vector<double>& samples) {
     stream << '[';
     for (std::size_t index = 0; index < samples.size(); ++index) {
@@ -332,7 +553,10 @@ void write_latency_array(std::ostream& stream, const std::vector<double>& sample
 void write_result(
     const Options& options,
     const LatencySummary& latency,
-    const std::vector<Ort::Value>& output) {
+    const std::vector<Ort::Value>& output,
+    const OutputParity& parity,
+    const GpuTelemetry& gpu_telemetry_before,
+    const GpuTelemetry& gpu_telemetry_after) {
     const auto output_values = output.front().GetTensorData<float>();
     const double output_sum = std::accumulate(output_values, output_values + kOutputShape[1], 0.0);
     const double throughput = 1000.0 / latency.mean_ms;
@@ -343,12 +567,18 @@ void write_result(
               << "  \"schema_version\": 1,\n"
               << "  \"runner\": {\n"
               << "    \"engine\": \"onnxruntime_cpp\",\n"
-              << "    \"device\": \"cpu\",\n"
-              << "    \"active_providers\": [\"CPUExecutionProvider\"],\n"
+              << "    \"device\": \"" << kRunnerDevice << "\",\n"
+              << "    \"active_providers\": [\"" << kPrimaryProvider << "\""
+#if defined(INFERENCE_BENCH_CUDA_RUNNER)
+              << ", \"CPUExecutionProvider\""
+#endif
+              << "],\n"
               << "    \"configuration\": {\n"
               << "      \"api\": \"onnxruntime_cxx_api\",\n"
               << "      \"language\": \"c++\",\n"
               << "      \"input_file\": \"" << json_escape(options.input_file.string()) << "\",\n"
+              << "      \"reference_output_file\": \""
+              << json_escape(options.reference_output_file.string()) << "\",\n"
               << "      \"output_shape\": [1, 1000],\n"
               << "      \"output_dtype\": \"float32\",\n"
               << "      \"output_sum\": ";
@@ -358,7 +588,7 @@ void write_result(
               << "    \"name\": \"resnet50\",\n"
               << "    \"input_shape\": [1, 3, 224, 224],\n"
               << "    \"input_seed\": " << options.input_seed << ",\n"
-              << "    \"model_seed\": null,\n"
+              << "    \"model_seed\": " << options.model_seed << ",\n"
               << "    \"artifact_path\": \"" << json_escape(options.model_path.string()) << "\",\n"
               << "    \"artifact_size_bytes\": " << artifact_size << "\n  },\n"
               << "  \"configuration\": {\n"
@@ -388,14 +618,26 @@ void write_result(
     } else {
         std::cout << "{\"status\": \"unavailable\", \"reason\": \"The native runner could not read process RSS.\"}";
     }
-    std::cout << ",\n    \"gpu_telemetry\": {\n"
-              << "      \"before\": {\"status\": \"unavailable\", \"reason\": \"CPU runner\"},\n"
-              << "      \"after\": {\"status\": \"unavailable\", \"reason\": \"CPU runner\"}\n"
-              << "    }\n  },\n"
-              << "  \"correctness\": {\"parity\": null},\n"
+    std::cout << ",\n    \"gpu_telemetry\": {\n      \"before\": ";
+    write_gpu_telemetry(std::cout, gpu_telemetry_before);
+    std::cout << ",\n      \"after\": ";
+    write_gpu_telemetry(std::cout, gpu_telemetry_after);
+    std::cout << "\n    }\n  },\n"
+              << "  \"correctness\": {\"parity\": {\"max_absolute_error\": ";
+    write_number(std::cout, parity.max_absolute_error);
+    std::cout << ", \"max_relative_error\": ";
+    write_number(std::cout, parity.max_relative_error);
+    std::cout << ", \"prediction_agreement\": ";
+    write_number(std::cout, parity.prediction_agreement);
+    std::cout << "}},\n"
               << "  \"environment\": {\n"
               << "    \"onnxruntime\": {\"status\": \"available\", \"version\": \"" << Ort::GetVersionString() << "\"},\n"
-              << "    \"native_runner\": {\"status\": \"partial\", \"note\": \"Host and driver capture will be added with the native CUDA path.\"}\n"
+              << "    \"native_runner\": {\"status\": \"available\"}"
+#if defined(INFERENCE_BENCH_CUDA_RUNNER)
+              << ",\n    \"cuda\": {\"runtime_version\": " << cuda_runtime_version()
+              << ", \"device_ordinal\": 0}"
+#endif
+              << "\n"
               << "  }\n"
               << "}\n";
 }
@@ -409,10 +651,11 @@ int main(int argc, char* argv[]) {
             fail("ONNX model does not exist: " + options.model_path.string());
         }
         auto input_values = read_input_file(options.input_file);
+        const auto reference_output = read_reference_output_file(options.reference_output_file);
 
         Ort::Env environment{ORT_LOGGING_LEVEL_WARNING, "inference-bench"};
         Ort::SessionOptions session_options;
-        session_options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+        configure_session(session_options);
         Ort::Session session{environment, options.model_path.c_str(), session_options};
         Ort::AllocatorWithDefaultOptions allocator;
         validate_interface(session, allocator);
@@ -421,20 +664,34 @@ int main(int argc, char* argv[]) {
         for (int index = 0; index < options.warmup_iterations; ++index) {
             validate_output(run_once(session, memory_info, input_values));
         }
+        synchronize_device();
 
         std::vector<double> samples_ms;
         samples_ms.reserve(static_cast<std::size_t>(options.timed_iterations));
         std::vector<Ort::Value> final_output;
+        const auto gpu_telemetry_before = sample_gpu_telemetry();
         for (int index = 0; index < options.timed_iterations; ++index) {
             const auto started_at = std::chrono::steady_clock::now();
             auto output = run_once(session, memory_info, input_values);
+            synchronize_device();
             const auto completed_at = std::chrono::steady_clock::now();
             validate_output(output);
             samples_ms.push_back(std::chrono::duration<double, std::milli>(completed_at - started_at).count());
             final_output = std::move(output);
         }
+        const auto gpu_telemetry_after = sample_gpu_telemetry();
 
-        write_result(options, summarize(std::move(samples_ms)), final_output);
+        const auto output_values = final_output.front().GetTensorData<float>();
+        const auto parity = compare_outputs(
+            reference_output,
+            std::span<const float>{output_values, static_cast<std::size_t>(kOutputShape[1])});
+        write_result(
+            options,
+            summarize(std::move(samples_ms)),
+            final_output,
+            parity,
+            gpu_telemetry_before,
+            gpu_telemetry_after);
         return EXIT_SUCCESS;
     } catch (const Ort::Exception& error) {
         std::cerr << "ONNX Runtime error: " << error.what() << '\n';
