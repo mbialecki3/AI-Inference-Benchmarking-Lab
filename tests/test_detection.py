@@ -6,7 +6,9 @@ import numpy as np
 import torch
 
 from inference_bench.detection import (
+    DetectionLayout,
     YOLO11N_INPUT_SHAPE,
+    YOLO11N_LAYOUT,
     YOLO11N_OUTPUT_SHAPE,
     compare_detection_outputs,
     make_detection_input,
@@ -34,14 +36,60 @@ class DetectionContractTests(unittest.TestCase):
         candidate = reference.copy()
         candidate[:, 4:, 1] = candidate[:, 4:, 1][:, ::-1]
 
-        parity = compare_detection_outputs(reference, candidate)
+        parity = compare_detection_outputs(
+            reference,
+            candidate,
+            layout=DetectionLayout(
+                output="raw_predictions",
+                box_coordinate_channels=4,
+                class_channel_axis=1,
+                candidate_axis=2,
+                class_channel_start=4,
+                class_count=2,
+            ),
+        )
 
         self.assertEqual(parity.prediction_agreement, 0.5)
         self.assertGreater(parity.max_absolute_error, 0)
 
+    def test_detection_layout_metadata_and_non_default_class_axis_are_configurable(self) -> None:
+        layout = DetectionLayout(
+            output="raw_predictions",
+            box_coordinate_channels=4,
+            class_channel_axis=2,
+            candidate_axis=1,
+            class_channel_start=4,
+            class_count=2,
+        )
+        reference = np.zeros((1, 2, 6), dtype=np.float32)
+        reference[:, :, 4] = (0.9, 0.1)
+        reference[:, :, 5] = (0.1, 0.9)
+        candidate = reference.copy()
+        candidate[:, 1, 4:] = candidate[:, 1, 4:][:, ::-1]
+
+        parity = compare_detection_outputs(reference, candidate, layout=layout)
+
+        self.assertEqual(parity.prediction_agreement, 0.5)
+        self.assertEqual(layout.benchmark_metadata()["class_channel_axis"], 2)
+        self.assertEqual(YOLO11N_LAYOUT.benchmark_metadata()["class_count"], 80)
+
     def test_detection_parity_rejects_non_detection_shapes(self) -> None:
         with self.assertRaisesRegex(ValueError, "rank-3"):
             compare_detection_outputs(np.zeros((1, 1000)), np.zeros((1, 1000)))
+
+    def test_detection_layout_rejects_duplicate_normalized_axes(self) -> None:
+        layout = DetectionLayout(
+            output="raw_predictions",
+            box_coordinate_channels=4,
+            class_channel_axis=-1,
+            candidate_axis=2,
+            class_channel_start=4,
+            class_count=2,
+        )
+        output = np.zeros((1, 2, 6), dtype=np.float32)
+
+        with self.assertRaisesRegex(ValueError, "distinct output axes"):
+            compare_detection_outputs(output, output, layout=layout)
 
 
 if __name__ == "__main__":

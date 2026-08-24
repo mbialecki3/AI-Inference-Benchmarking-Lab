@@ -3,9 +3,12 @@
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import numpy as np
 
+from inference_bench.detection import YOLO11N_INPUT_SHAPE, YOLO11N_OUTPUT_SHAPE, make_detection_input
 from inference_bench.input_artifact import (
     export_input_artifact,
     export_reference_output_artifact,
@@ -77,6 +80,30 @@ class InputArtifactTests(unittest.TestCase):
         self.assertEqual(output_artifact.output_shape, (1, 1000))
         self.assertEqual(input_artifact.dtype, "float32")
         self.assertEqual(output_artifact.dtype, "float32")
+
+    def test_yolo_artifacts_preserve_raw_input_and_reference_output_contracts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            input_path = directory / "yolo_input.bin"
+            output_path = directory / "yolo_raw.bin"
+            input_artifact = export_input_artifact("yolo11n", input_path)
+            expected_output = np.arange(np.prod(YOLO11N_OUTPUT_SHAPE), dtype=np.float32).reshape(YOLO11N_OUTPUT_SHAPE)
+            with patch(
+                "inference_bench.input_artifact.run_yolo_pytorch",
+                return_value=SimpleNamespace(output=expected_output),
+            ):
+                output_artifact = export_reference_output_artifact(
+                    "yolo11n", output_path, weights="yolo11n.pt"
+                )
+
+            actual_input = np.fromfile(input_path, dtype="<f4").reshape(YOLO11N_INPUT_SHAPE)
+            actual_output = np.fromfile(output_path, dtype="<f4").reshape(YOLO11N_OUTPUT_SHAPE)
+
+        np.testing.assert_array_equal(actual_input, make_detection_input().numpy())
+        np.testing.assert_array_equal(actual_output, expected_output)
+        self.assertEqual(input_artifact.input_shape, YOLO11N_INPUT_SHAPE)
+        self.assertEqual(output_artifact.output_shape, YOLO11N_OUTPUT_SHAPE)
+        self.assertIsNone(output_artifact.model_seed)
 
 
 if __name__ == "__main__":

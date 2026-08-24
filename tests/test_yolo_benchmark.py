@@ -48,7 +48,16 @@ class YoloBenchmarkTests(unittest.TestCase):
         self.assertEqual(record["runner"]["active_providers"], ["CPU"])
         self.assertEqual(
             record["runner"]["configuration"],
-            {"task": "detection", "output": "raw_pre_nms", "class_count": 80, "inference_precision": "f32"},
+            {
+                "task": "detection",
+                "output": "raw_pre_nms",
+                "box_coordinate_channels": 4,
+                "class_channel_axis": 1,
+                "candidate_axis": 2,
+                "class_channel_start": 4,
+                "class_count": 80,
+                "inference_precision": "f32",
+            },
         )
         self.assertEqual(record["model"]["artifact_size_bytes"], 4)
         self.assertEqual(record["correctness"]["parity"]["prediction_agreement"], 1.0)

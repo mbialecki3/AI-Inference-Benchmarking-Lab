@@ -37,15 +37,16 @@ name and use a model-specific default ONNX and reference-output path.
 
 ## Native ONNX Runtime C++ CPU and CUDA
 
-The C++ track now begins with a native ONNX Runtime CPU runner and CMake
-scaffolding. It consumes the same validated `images` → `logits` ONNX artifact,
-uses the existing warm-run protocol (5 warmups and 20 timed synchronous
-requests by default), verifies float32 `NCHW [1,3,224,224]` input and float32
-`[1,1000]` logits, and emits the schema-v1 measurement sections used by the
-Python benchmark records. The artifact command also saves deterministic
-PyTorch CPU logits. Both native runners compare their final logits with that
-reference and record maximum absolute/relative error plus predicted-class
-agreement. This is a runner correctness check, not a dataset-accuracy metric.
+The native ONNX Runtime CPU and CUDA runners share one C++ implementation and
+CMake pattern. They support the classification `images` → `logits` contract and
+the raw YOLO11n `images` → `output0` contract. Each uses the existing warm-run
+protocol (5 warmups and 20 timed synchronous requests by default), validates
+the exact float32 static shapes, and emits schema-v1 measurement sections used
+by the Python benchmark records. The artifact command also saves deterministic
+PyTorch CPU outputs. Native runs compare their final raw output with that
+reference and record maximum absolute/relative error plus prediction agreement.
+For YOLO11n, agreement is the fraction of matching winning COCO classes at all
+8,400 prediction locations; it is not mAP or post-processing accuracy.
 
 Generate the exact seeded input and reference-output bytes used by the Python
 runners. This avoids trying to duplicate PyTorch's RNG behavior or model
@@ -122,10 +123,12 @@ hosts without CUDA.
 YOLO11n is a separate detection path: it uses a static `float32 NCHW
 [1,3,640,640]` input and preserves the model's raw pre-NMS tensor. Its parity
 check reports numerical error plus per-candidate winning-class agreement; it is
-not COCO mAP and it does not benchmark post-processing. The detection slice
+not COCO mAP and it does not benchmark post-processing. Each record stores its
+raw detection layout (box-channel count, class/candidate axes, class range, and
+class count), so a second detector can use a different output arrangement
+without changing the parity contract. The detection slice
 covers PyTorch eager and ONNX Runtime on CPU/CUDA plus OpenVINO `CPU` with an
-explicit float32 inference hint. Native C++ detection runners follow after the
-raw-output contract is established.
+explicit float32 inference hint, and native C++ ONNX Runtime on CPU/CUDA.
 
 Place the official `yolo11n.pt` checkpoint at `artifacts/yolo11n.pt`, then
 export the static ONNX artifact and record a CUDA ONNX Runtime run:
@@ -138,7 +141,21 @@ PYTHONPATH=src python -m inference_bench.yolo_benchmark \
 # Compile the same static ONNX raw-output artifact for OpenVINO CPU.
 PYTHONPATH=src python -m inference_bench.yolo_benchmark \
   --engine openvino --device cpu --verify-parity
+
+# Create byte-identical native input/reference artifacts, then run C++ CPU.
+PYTHONPATH=src python -m inference_bench.input_artifact --model yolo11n
+mkdir -p results/yolo11n/cpu
+./build/cpp/cpp/onnxruntime_cpu_runner \
+  --model yolo11n \
+  --input-file artifacts/inputs/yolo11n_seed69420_f32_nchw.bin \
+  --reference-output artifacts/reference_outputs/yolo11n_input69420_f32_raw.bin \
+  > results/yolo11n/cpu/onnxruntime_cpp.json
 ```
+
+Use the same `--model yolo11n`, input, and reference-output arguments with
+`onnxruntime_cuda_runner` after the CUDA build described above. The native JSON
+has `model_seed: null`, matching the Python YOLO records, so the report can
+fairly compare all four engines when warmup and timed-request counts match.
 
 The environment pins Ultralytics 8.4.127. Its YOLO11 model and ONNX export API
 are documented by [Ultralytics](https://docs.ultralytics.com/models/yolo11) and

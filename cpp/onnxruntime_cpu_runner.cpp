@@ -47,23 +47,66 @@ extern "C" cudaError_t cudaRuntimeGetVersion(int* runtime_version);
 namespace {
 
 constexpr std::string_view kDefaultModelName = "resnet50";
-constexpr std::string_view kInputName = "images";
-constexpr std::string_view kOutputName = "logits";
 constexpr std::int64_t kDefaultInputSeed = 69420;
 constexpr std::int64_t kDefaultModelSeed = 67;
 constexpr int kDefaultWarmupIterations = 5;
 constexpr int kDefaultTimedIterations = 20;
-constexpr std::array<std::int64_t, 4> kInputShape{1, 3, 224, 224};
-constexpr std::array<std::int64_t, 2> kOutputShape{1, 1000};
+
+[[noreturn]] void fail(const std::string& message);
+
+enum class Task { kClassification, kDetection };
+
+struct DetectionLayout {
+    std::string_view output;
+    std::int64_t box_coordinate_channels;
+    std::int64_t class_channel_axis;
+    std::int64_t candidate_axis;
+    std::int64_t class_channel_start;
+    std::int64_t class_count;
+};
+
+struct ModelContract {
+    std::string_view name;
+    std::string_view input_name;
+    std::string_view output_name;
+    std::span<const std::int64_t> input_shape;
+    std::span<const std::int64_t> output_shape;
+    Task task;
+    std::optional<DetectionLayout> detection_layout;
+};
+
+constexpr std::array<std::int64_t, 4> kClassificationInputShape{1, 3, 224, 224};
+constexpr std::array<std::int64_t, 2> kClassificationOutputShape{1, 1000};
+constexpr std::array<std::int64_t, 4> kYolo11nInputShape{1, 3, 640, 640};
+constexpr std::array<std::int64_t, 3> kYolo11nOutputShape{1, 84, 8400};
+
+const ModelContract& model_contract(std::string_view name) {
+    static constexpr ModelContract kResnet50{
+        "resnet50", "images", "logits", kClassificationInputShape, kClassificationOutputShape,
+        Task::kClassification, std::nullopt};
+    static constexpr ModelContract kMobilenetV3Large{
+        "mobilenet_v3_large", "images", "logits", kClassificationInputShape, kClassificationOutputShape,
+        Task::kClassification, std::nullopt};
+    static constexpr ModelContract kEfficientnetB0{
+        "efficientnet_b0", "images", "logits", kClassificationInputShape, kClassificationOutputShape,
+        Task::kClassification, std::nullopt};
+    static constexpr ModelContract kYolo11n{
+        "yolo11n", "images", "output0", kYolo11nInputShape, kYolo11nOutputShape, Task::kDetection,
+        DetectionLayout{"raw_pre_nms", 4, 1, 2, 4, 80}};
+    if (name == kResnet50.name) return kResnet50;
+    if (name == kMobilenetV3Large.name) return kMobilenetV3Large;
+    if (name == kEfficientnetB0.name) return kEfficientnetB0;
+    if (name == kYolo11n.name) return kYolo11n;
+    fail("Supported native models: resnet50, mobilenet_v3_large, efficientnet_b0, yolo11n.");
+}
 
 struct Options {
     std::filesystem::path model_path{"artifacts/resnet50.onnx"};
     std::filesystem::path input_file;
-    std::filesystem::path reference_output_file{
-        "artifacts/reference_outputs/resnet50_seed67_input69420_f32_logits.bin"};
+    std::filesystem::path reference_output_file;
     std::string model_name{kDefaultModelName};
     std::int64_t input_seed{kDefaultInputSeed};
-    std::int64_t model_seed{kDefaultModelSeed};
+    std::optional<std::int64_t> model_seed{kDefaultModelSeed};
     int warmup_iterations{kDefaultWarmupIterations};
     int timed_iterations{kDefaultTimedIterations};
 };
@@ -136,19 +179,19 @@ std::int64_t parse_int64(std::string_view value, std::string_view option) {
 void print_usage(std::ostream& stream) {
     stream << "Usage: " << kRunnerExecutable << " --input-file PATH [options]\n"
            << "\n"
-           << "Runs a validated classification ONNX artifact with ONNX Runtime's "
+           << "Runs a validated classification or raw YOLO11n ONNX artifact with ONNX Runtime's "
            << kPrimaryProvider << ".\n"
            << "The input file must be the float32 NCHW binary emitted by\n"
            << "python -m inference_bench.input_artifact.\n"
            << "\n"
            << "Options:\n"
-           << "  --model NAME         resnet50, mobilenet_v3_large, or efficientnet_b0 "
+           << "  --model NAME         resnet50, mobilenet_v3_large, efficientnet_b0, or yolo11n "
               "(default: resnet50)\n"
            << "  --model-path PATH    ONNX artifact (default: artifacts/<model>.onnx)\n"
            << "  --input-file PATH    Required deterministic float32 input binary\n"
-           << "  --reference-output PATH  PyTorch float32 logits for numerical parity\n"
+           << "  --reference-output PATH  PyTorch float32 raw output for numerical parity\n"
            << "  --input-seed N       Metadata only; must match input artifact (default: 69420)\n"
-           << "  --model-seed N       PyTorch seed used for reference logits (default: 67)\n"
+           << "  --model-seed N       PyTorch seed used for classification reference logits (default: 67)\n"
            << "  --warmup N           Warm synchronous inferences (default: 5)\n"
            << "  --iterations N       Timed synchronous inferences (default: 20)\n"
            << "  --help               Show this help text\n";
@@ -166,10 +209,7 @@ Options parse_arguments(int argc, char* argv[]) {
         }
         if (argument == "--model") {
             const auto model = require_value(index, argc, argv, argument);
-            if (model != "resnet50" && model != "mobilenet_v3_large"
-                && model != "efficientnet_b0") {
-                fail("Supported native models: resnet50, mobilenet_v3_large, efficientnet_b0.");
-            }
+            (void)model_contract(model);
             options.model_name = model;
         } else if (argument == "--model-path") {
             options.model_path = require_value(index, argc, argv, argument);
@@ -194,37 +234,55 @@ Options parse_arguments(int argc, char* argv[]) {
     if (options.input_file.empty()) {
         fail("--input-file is required to preserve byte-identical cross-language inputs.");
     }
+    const auto& contract = model_contract(options.model_name);
     if (!has_model_path) {
         options.model_path = std::filesystem::path{"artifacts"} / (options.model_name + ".onnx");
     }
     if (!has_reference_output) {
-        options.reference_output_file = std::filesystem::path{"artifacts/reference_outputs"}
-            / (options.model_name + "_seed" + std::to_string(options.model_seed)
-               + "_input" + std::to_string(options.input_seed) + "_f32_logits.bin");
+        if (contract.task == Task::kDetection) {
+            options.reference_output_file = std::filesystem::path{"artifacts/reference_outputs"}
+                / (options.model_name + "_input" + std::to_string(options.input_seed) + "_f32_raw.bin");
+        } else {
+            options.reference_output_file = std::filesystem::path{"artifacts/reference_outputs"}
+                / (options.model_name + "_seed" + std::to_string(*options.model_seed)
+                   + "_input" + std::to_string(options.input_seed) + "_f32_logits.bin");
+        }
     }
+    if (contract.task == Task::kDetection) options.model_seed = std::nullopt;
     return options;
 }
 
-std::size_t expected_input_elements() {
-    return static_cast<std::size_t>(std::accumulate(
-        kInputShape.begin(), kInputShape.end(), std::int64_t{1}, std::multiplies<>{}));
+std::string shape_description(std::span<const std::int64_t> shape) {
+    std::ostringstream stream;
+    stream << '[';
+    for (std::size_t index = 0; index < shape.size(); ++index) {
+        if (index != 0) stream << ',';
+        stream << shape[index];
+    }
+    stream << ']';
+    return stream.str();
 }
 
-std::vector<float> read_input_file(const std::filesystem::path& path) {
+std::size_t expected_elements(std::span<const std::int64_t> shape) {
+    return static_cast<std::size_t>(std::accumulate(
+        shape.begin(), shape.end(), std::int64_t{1}, std::multiplies<>{}));
+}
+
+std::vector<float> read_input_file(const std::filesystem::path& path, const ModelContract& contract) {
     if constexpr (std::endian::native != std::endian::little) {
         fail("The native CPU runner currently requires a little-endian host.");
     }
     if (!std::filesystem::is_regular_file(path)) {
         fail("Input file does not exist: " + path.string());
     }
-    const auto expected_bytes = expected_input_elements() * sizeof(float);
+    const auto expected_bytes = expected_elements(contract.input_shape) * sizeof(float);
     const auto actual_bytes = std::filesystem::file_size(path);
     if (actual_bytes != expected_bytes) {
         fail("Input file has " + std::to_string(actual_bytes) + " bytes; expected "
-             + std::to_string(expected_bytes) + " for float32 NCHW [1,3,224,224].");
+             + std::to_string(expected_bytes) + " for float32 NCHW " + shape_description(contract.input_shape) + ".");
     }
 
-    std::vector<float> values(expected_input_elements());
+    std::vector<float> values(expected_elements(contract.input_shape));
     std::ifstream stream(path, std::ios::binary);
     stream.read(reinterpret_cast<char*>(values.data()), static_cast<std::streamsize>(actual_bytes));
     if (!stream || stream.gcount() != static_cast<std::streamsize>(actual_bytes)) {
@@ -233,22 +291,23 @@ std::vector<float> read_input_file(const std::filesystem::path& path) {
     return values;
 }
 
-std::vector<float> read_reference_output_file(const std::filesystem::path& path) {
+std::vector<float> read_reference_output_file(
+    const std::filesystem::path& path, const ModelContract& contract) {
     if constexpr (std::endian::native != std::endian::little) {
         fail("The native runner currently requires a little-endian host.");
     }
     if (!std::filesystem::is_regular_file(path)) {
         fail("Reference-output file does not exist: " + path.string());
     }
-    const auto expected_elements = static_cast<std::size_t>(kOutputShape[0] * kOutputShape[1]);
-    const auto expected_bytes = expected_elements * sizeof(float);
+    const auto output_elements = expected_elements(contract.output_shape);
+    const auto expected_bytes = output_elements * sizeof(float);
     const auto actual_bytes = std::filesystem::file_size(path);
     if (actual_bytes != expected_bytes) {
         fail("Reference-output file has " + std::to_string(actual_bytes) + " bytes; expected "
-             + std::to_string(expected_bytes) + " for float32 logits [1,1000].");
+             + std::to_string(expected_bytes) + " for float32 raw output " + shape_description(contract.output_shape) + ".");
     }
 
-    std::vector<float> values(expected_elements);
+    std::vector<float> values(output_elements);
     std::ifstream stream(path, std::ios::binary);
     stream.read(reinterpret_cast<char*>(values.data()), static_cast<std::streamsize>(actual_bytes));
     if (!stream || stream.gcount() != static_cast<std::streamsize>(actual_bytes)) {
@@ -262,15 +321,17 @@ std::vector<std::int64_t> tensor_shape(const TensorTypeAndShapeInfo& info) {
     return info.GetShape();
 }
 
-void validate_interface(Ort::Session& session, Ort::AllocatorWithDefaultOptions& allocator) {
+void validate_interface(
+    Ort::Session& session, Ort::AllocatorWithDefaultOptions& allocator, const ModelContract& contract) {
     if (session.GetInputCount() != 1 || session.GetOutputCount() != 1) {
         fail("Expected exactly one ONNX input and output.");
     }
     const auto input_name = session.GetInputNameAllocated(0, allocator);
     const auto output_name = session.GetOutputNameAllocated(0, allocator);
-    if (std::string_view{input_name.get()} != kInputName
-        || std::string_view{output_name.get()} != kOutputName) {
-        fail("Expected ONNX interface images -> logits.");
+    if (std::string_view{input_name.get()} != contract.input_name
+        || std::string_view{output_name.get()} != contract.output_name) {
+        fail("ONNX interface does not match " + std::string(contract.input_name) + " -> "
+             + std::string(contract.output_name) + ".");
     }
 
     // GetTensorTypeAndShapeInfo returns an unowned view. Keep TypeInfo alive
@@ -283,40 +344,66 @@ void validate_interface(Ort::Session& session, Ort::AllocatorWithDefaultOptions&
         || output_info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
         fail("Expected float32 ONNX input and output tensors.");
     }
-    if (tensor_shape(input_info) != std::vector<std::int64_t>(kInputShape.begin(), kInputShape.end())
-        || tensor_shape(output_info) != std::vector<std::int64_t>(kOutputShape.begin(), kOutputShape.end())) {
-        fail("ONNX tensor shapes do not match the validated classification contract.");
+    if (tensor_shape(input_info) != std::vector<std::int64_t>(contract.input_shape.begin(), contract.input_shape.end())
+        || tensor_shape(output_info) != std::vector<std::int64_t>(contract.output_shape.begin(), contract.output_shape.end())) {
+        fail("ONNX tensor shapes do not match the validated " + std::string(contract.name) + " contract.");
     }
 }
 
 std::vector<Ort::Value> run_once(
     Ort::Session& session,
     const Ort::MemoryInfo& memory_info,
-    std::span<float> input_values) {
+    std::span<float> input_values,
+    const ModelContract& contract) {
     auto input_tensor = Ort::Value::CreateTensor<float>(
         memory_info,
         input_values.data(),
         input_values.size(),
-        kInputShape.data(),
-        kInputShape.size());
-    const char* input_names[] = {kInputName.data()};
-    const char* output_names[] = {kOutputName.data()};
+        contract.input_shape.data(),
+        contract.input_shape.size());
+    const char* input_names[] = {contract.input_name.data()};
+    const char* output_names[] = {contract.output_name.data()};
     return session.Run(
         Ort::RunOptions{nullptr}, input_names, &input_tensor, 1, output_names, 1);
 }
 
-void validate_output(const std::vector<Ort::Value>& outputs) {
+void validate_output(const std::vector<Ort::Value>& outputs, const ModelContract& contract) {
     if (outputs.size() != 1 || !outputs.front().IsTensor()) {
-        fail("ONNX Runtime did not return one logits tensor.");
+        fail("ONNX Runtime did not return one raw output tensor.");
     }
     const auto info = outputs.front().GetTensorTypeAndShapeInfo();
     if (info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT
-        || tensor_shape(info) != std::vector<std::int64_t>(kOutputShape.begin(), kOutputShape.end())) {
-        fail("ONNX Runtime output does not match float32 logits [1,1000].");
+        || tensor_shape(info) != std::vector<std::int64_t>(contract.output_shape.begin(), contract.output_shape.end())) {
+        fail("ONNX Runtime output does not match float32 " + shape_description(contract.output_shape) + ".");
     }
 }
 
-OutputParity compare_outputs(std::span<const float> reference, std::span<const float> candidate) {
+std::size_t winning_class(
+    std::span<const float> values,
+    std::span<const std::int64_t> shape,
+    const DetectionLayout& layout,
+    std::size_t batch_index,
+    std::size_t candidate_index) {
+    const auto class_axis = static_cast<std::size_t>(layout.class_channel_axis);
+    const auto candidate_axis = static_cast<std::size_t>(layout.candidate_axis);
+    const auto batch_axis = 3U - class_axis - candidate_axis;
+    const std::array<std::size_t, 3> strides{
+        static_cast<std::size_t>(shape[1] * shape[2]),
+        static_cast<std::size_t>(shape[2]),
+        1};
+    const auto base = batch_index * strides[batch_axis] + candidate_index * strides[candidate_axis];
+    std::size_t winner = static_cast<std::size_t>(layout.class_channel_start);
+    const auto class_stop = winner + static_cast<std::size_t>(layout.class_count);
+    for (std::size_t channel = winner + 1; channel < class_stop; ++channel) {
+        if (values[base + channel * strides[class_axis]] > values[base + winner * strides[class_axis]]) {
+            winner = channel;
+        }
+    }
+    return winner;
+}
+
+OutputParity compare_outputs(
+    std::span<const float> reference, std::span<const float> candidate, const ModelContract& contract) {
     if (reference.size() != candidate.size() || reference.empty()) {
         fail("Reference and candidate logits must have the same non-zero size.");
     }
@@ -332,14 +419,45 @@ OutputParity compare_outputs(std::span<const float> reference, std::span<const f
         max_relative_error = std::max(
             max_relative_error,
             absolute_error / std::max(std::abs(reference_value), 1.0e-12));
-        if (reference[index] > reference[reference_index]) {
-            reference_index = index;
-        }
-        if (candidate[index] > candidate[candidate_index]) {
-            candidate_index = index;
+        if (contract.task == Task::kClassification) {
+            if (reference[index] > reference[reference_index]) reference_index = index;
+            if (candidate[index] > candidate[candidate_index]) candidate_index = index;
         }
     }
-    return {max_absolute_error, max_relative_error, reference_index == candidate_index ? 1.0 : 0.0};
+    if (contract.task == Task::kClassification) {
+        return {max_absolute_error, max_relative_error, reference_index == candidate_index ? 1.0 : 0.0};
+    }
+
+    if (!contract.detection_layout) {
+        fail("The detection model contract is missing raw-output layout metadata.");
+    }
+    const auto& layout = *contract.detection_layout;
+    if (layout.class_channel_axis < 0 || layout.class_channel_axis >= 3
+        || layout.candidate_axis < 0 || layout.candidate_axis >= 3
+        || layout.class_channel_axis == layout.candidate_axis) {
+        fail("Detection class and candidate axes must be distinct rank-3 axes.");
+    }
+    const auto class_axis = static_cast<std::size_t>(layout.class_channel_axis);
+    const auto candidate_axis = static_cast<std::size_t>(layout.candidate_axis);
+    const auto batch_axis = 3U - class_axis - candidate_axis;
+    const auto class_stop = layout.class_channel_start + layout.class_count;
+    if (layout.class_channel_start < layout.box_coordinate_channels || layout.class_count <= 0
+        || class_stop > contract.output_shape[class_axis]) {
+        fail("Detection layout does not fit the configured raw output shape.");
+    }
+    const auto batches = static_cast<std::size_t>(contract.output_shape[batch_axis]);
+    const auto candidates = static_cast<std::size_t>(contract.output_shape[candidate_axis]);
+    std::size_t matching_classes{};
+    for (std::size_t batch = 0; batch < batches; ++batch) {
+        for (std::size_t location = 0; location < candidates; ++location) {
+            if (winning_class(reference, contract.output_shape, layout, batch, location)
+                == winning_class(candidate, contract.output_shape, layout, batch, location)) {
+                ++matching_classes;
+            }
+        }
+    }
+    return {max_absolute_error, max_relative_error,
+            static_cast<double>(matching_classes) / static_cast<double>(batches * candidates)};
 }
 
 void configure_session(Ort::SessionOptions& session_options) {
@@ -567,15 +685,26 @@ void write_latency_array(std::ostream& stream, const std::vector<double>& sample
     stream << ']';
 }
 
+void write_shape(std::ostream& stream, std::span<const std::int64_t> shape) {
+    stream << '[';
+    for (std::size_t index = 0; index < shape.size(); ++index) {
+        if (index != 0) stream << ',';
+        stream << shape[index];
+    }
+    stream << ']';
+}
+
 void write_result(
     const Options& options,
     const LatencySummary& latency,
     const std::vector<Ort::Value>& output,
     const OutputParity& parity,
+    const ModelContract& contract,
     const GpuTelemetry& gpu_telemetry_before,
     const GpuTelemetry& gpu_telemetry_after) {
     const auto output_values = output.front().GetTensorData<float>();
-    const double output_sum = std::accumulate(output_values, output_values + kOutputShape[1], 0.0);
+    const double output_sum = std::accumulate(
+        output_values, output_values + expected_elements(contract.output_shape), 0.0);
     const double throughput = 1000.0 / latency.mean_ms;
     const auto rss = process_rss_bytes();
     const auto artifact_size = std::filesystem::file_size(options.model_path);
@@ -596,16 +725,40 @@ void write_result(
               << "      \"input_file\": \"" << json_escape(options.input_file.string()) << "\",\n"
               << "      \"reference_output_file\": \""
               << json_escape(options.reference_output_file.string()) << "\",\n"
-              << "      \"output_shape\": [1, 1000],\n"
-              << "      \"output_dtype\": \"float32\",\n"
+              << "      \"output_shape\": ";
+    write_shape(std::cout, contract.output_shape);
+    std::cout << ",\n"
+              << "      \"output_dtype\": \"float32\"";
+    if (contract.task == Task::kDetection) {
+        if (!contract.detection_layout) {
+            fail("The detection model contract is missing raw-output layout metadata.");
+        }
+        const auto& layout = *contract.detection_layout;
+        std::cout << ",\n      \"task\": \"detection\",\n"
+                  << "      \"output\": \"" << json_escape(std::string(layout.output)) << "\",\n"
+                  << "      \"box_coordinate_channels\": " << layout.box_coordinate_channels << ",\n"
+                  << "      \"class_channel_axis\": " << layout.class_channel_axis << ",\n"
+                  << "      \"candidate_axis\": " << layout.candidate_axis << ",\n"
+                  << "      \"class_channel_start\": " << layout.class_channel_start << ",\n"
+                  << "      \"class_count\": " << layout.class_count;
+    }
+    std::cout << ",\n"
               << "      \"output_sum\": ";
     write_number(std::cout, output_sum);
     std::cout << "\n    }\n  },\n"
               << "  \"model\": {\n"
               << "    \"name\": \"" << json_escape(options.model_name) << "\",\n"
-              << "    \"input_shape\": [1, 3, 224, 224],\n"
+              << "    \"input_shape\": ";
+    write_shape(std::cout, contract.input_shape);
+    std::cout << ",\n"
               << "    \"input_seed\": " << options.input_seed << ",\n"
-              << "    \"model_seed\": " << options.model_seed << ",\n"
+              << "    \"model_seed\": ";
+    if (options.model_seed) {
+        std::cout << *options.model_seed;
+    } else {
+        std::cout << "null";
+    }
+    std::cout << ",\n"
               << "    \"artifact_path\": \"" << json_escape(options.model_path.string()) << "\",\n"
               << "    \"artifact_size_bytes\": " << artifact_size << "\n  },\n"
               << "  \"configuration\": {\n"
@@ -667,19 +820,20 @@ int main(int argc, char* argv[]) {
         if (!std::filesystem::is_regular_file(options.model_path)) {
             fail("ONNX model does not exist: " + options.model_path.string());
         }
-        auto input_values = read_input_file(options.input_file);
-        const auto reference_output = read_reference_output_file(options.reference_output_file);
+        const auto& contract = model_contract(options.model_name);
+        auto input_values = read_input_file(options.input_file, contract);
+        const auto reference_output = read_reference_output_file(options.reference_output_file, contract);
 
         Ort::Env environment{ORT_LOGGING_LEVEL_WARNING, "inference-bench"};
         Ort::SessionOptions session_options;
         configure_session(session_options);
         Ort::Session session{environment, options.model_path.c_str(), session_options};
         Ort::AllocatorWithDefaultOptions allocator;
-        validate_interface(session, allocator);
+        validate_interface(session, allocator, contract);
         const auto memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
 
         for (int index = 0; index < options.warmup_iterations; ++index) {
-            validate_output(run_once(session, memory_info, input_values));
+            validate_output(run_once(session, memory_info, input_values, contract), contract);
         }
         synchronize_device();
 
@@ -689,10 +843,10 @@ int main(int argc, char* argv[]) {
         const auto gpu_telemetry_before = sample_gpu_telemetry();
         for (int index = 0; index < options.timed_iterations; ++index) {
             const auto started_at = std::chrono::steady_clock::now();
-            auto output = run_once(session, memory_info, input_values);
+            auto output = run_once(session, memory_info, input_values, contract);
             synchronize_device();
             const auto completed_at = std::chrono::steady_clock::now();
-            validate_output(output);
+            validate_output(output, contract);
             samples_ms.push_back(std::chrono::duration<double, std::milli>(completed_at - started_at).count());
             final_output = std::move(output);
         }
@@ -701,12 +855,14 @@ int main(int argc, char* argv[]) {
         const auto output_values = final_output.front().GetTensorData<float>();
         const auto parity = compare_outputs(
             reference_output,
-            std::span<const float>{output_values, static_cast<std::size_t>(kOutputShape[1])});
+            std::span<const float>{output_values, expected_elements(contract.output_shape)},
+            contract);
         write_result(
             options,
             summarize(std::move(samples_ms)),
             final_output,
             parity,
+            contract,
             gpu_telemetry_before,
             gpu_telemetry_after);
         return EXIT_SUCCESS;

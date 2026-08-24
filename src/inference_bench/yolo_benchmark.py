@@ -7,7 +7,13 @@ import json
 from pathlib import Path
 
 from inference_bench.benchmark_result import BenchmarkResult
-from inference_bench.detection import YOLO11N, YOLO11N_ONNX, YOLO11N_WEIGHTS, compare_detection_outputs
+from inference_bench.detection import (
+    YOLO11N,
+    YOLO11N_LAYOUT,
+    YOLO11N_ONNX,
+    YOLO11N_WEIGHTS,
+    compare_detection_outputs,
+)
 from inference_bench.environment import collect_environment, process_rss_bytes, sample_gpu_telemetry
 from inference_bench.output_paths import default_results_directory
 from inference_bench.results import save_result
@@ -52,7 +58,7 @@ def benchmark_yolo_openvino(model_path: Path | str, weights: Path | str, *, devi
 
 
 def _record(run: object, before: dict[str, object], after: dict[str, object], parity: object) -> BenchmarkResult:
-    configuration: dict[str, object] = {"task": "detection", "output": "raw_pre_nms", "class_count": 80}
+    configuration = YOLO11N_LAYOUT.benchmark_metadata()
     if run.engine == "openvino":
         configuration["inference_precision"] = "f32"
     return BenchmarkResult.create(

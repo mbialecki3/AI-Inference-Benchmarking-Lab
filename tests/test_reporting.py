@@ -26,6 +26,22 @@ def _record(engine: str, mean_ms: float, created_at: str, *, device: str = "cpu"
     }
 
 
+def _yolo_record(engine: str, mean_ms: float, created_at: str) -> dict[str, object]:
+    record = _record(engine, mean_ms, created_at)
+    record["model"] = {
+        "name": "yolo11n",
+        "input_shape": [1, 3, 640, 640],
+        "input_seed": 69420,
+        "model_seed": None,
+    }
+    record["runner"]["configuration"] = {
+        "task": "detection",
+        "output": "raw_pre_nms",
+        "class_count": 80,
+    }
+    return record
+
+
 class ReportingTests(unittest.TestCase):
     def test_selects_latest_record_per_engine_in_fair_group(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -61,6 +77,27 @@ class ReportingTests(unittest.TestCase):
             self.assertEqual(paths["throughput_plot"].suffix, ".png")
             self.assertTrue(paths["mean_latency_plot"].read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
             self.assertTrue(paths["throughput_plot"].read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
+
+    def test_yolo_records_with_null_model_seed_are_protocol_compatible_across_all_engines(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            for engine, mean_ms in (
+                ("pytorch_eager", 24.0),
+                ("onnxruntime", 18.0),
+                ("openvino", 8.0),
+                ("onnxruntime_cpp", 20.0),
+            ):
+                (directory / f"{engine}.json").write_text(
+                    json.dumps(_yolo_record(engine, mean_ms, "2026-08-23T00:00:00+00:00")),
+                    encoding="utf-8",
+                )
+
+            selected = latest_comparable_records(load_records([directory]))
+
+        self.assertEqual(
+            {record.engine for record in selected},
+            {"pytorch_eager", "onnxruntime", "openvino", "onnxruntime_cpp"},
+        )
 
 
 if __name__ == "__main__":

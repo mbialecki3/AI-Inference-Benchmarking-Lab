@@ -17,6 +17,11 @@ import numpy as np
 from inference_bench.inputs import DEFAULT_INPUT_SEED, make_input
 from inference_bench.models import available_models
 from inference_bench.pytorch_runner import DEFAULT_MODEL_SEED, run_pytorch
+from inference_bench.detection import YOLO11N, YOLO11N_WEIGHTS, make_detection_input
+from inference_bench.yolo_runner import run_yolo_pytorch
+
+
+NATIVE_ARTIFACT_MODELS = (*available_models(), YOLO11N)
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,13 +51,13 @@ class InputArtifact:
 
 @dataclass(frozen=True, slots=True)
 class ReferenceOutputArtifact:
-    """Metadata for portable PyTorch logits used by native parity checks."""
+    """Metadata for portable PyTorch raw outputs used by native parity checks."""
 
     model_name: str
     output_path: Path
     output_shape: tuple[int, ...]
     input_seed: int
-    model_seed: int
+    model_seed: int | None
     dtype: str
     size_bytes: int
 
@@ -86,12 +91,15 @@ def export_input_artifact(
 
     destination = Path(output_path)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    tensor = make_input(
-        model_name,
-        batch_size=batch_size,
-        seed=input_seed,
-        device="cpu",
-    )
+    if model_name == YOLO11N:
+        tensor = make_detection_input(batch_size=batch_size, seed=input_seed, device="cpu")
+    else:
+        tensor = make_input(
+            model_name,
+            batch_size=batch_size,
+            seed=input_seed,
+            device="cpu",
+        )
     values = tensor.numpy()
     # ONNX Runtime's initial C++ runner accepts a simple dependency-free binary
     # format. Explicit conversion also makes byte order stable across hosts.
@@ -113,8 +121,9 @@ def export_reference_output_artifact(
     *,
     input_seed: int = DEFAULT_INPUT_SEED,
     model_seed: int = DEFAULT_MODEL_SEED,
+    weights: Path | str | None = None,
 ) -> ReferenceOutputArtifact:
-    """Write deterministic CPU PyTorch logits as little-endian float32 bytes.
+    """Write deterministic CPU PyTorch raw output as little-endian float32 bytes.
 
     The artifact is paired with :func:`export_input_artifact`: native runners
     consume the same input bytes and compare their output to these exact
@@ -123,22 +132,35 @@ def export_reference_output_artifact(
 
     destination = Path(output_path)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    reference = run_pytorch(
-        model_name,
-        device="cpu",
-        input_seed=input_seed,
-        model_seed=model_seed,
-        warmup_iterations=0,
-        timed_iterations=1,
-    )
-    values = np.ascontiguousarray(reference.output.numpy(), dtype="<f4")
+    if model_name == YOLO11N:
+        if weights is None:
+            raise ValueError("YOLO11n reference-output artifacts require an explicit weights path.")
+        reference_values = run_yolo_pytorch(
+            weights,
+            device="cpu",
+            input_seed=input_seed,
+            warmup_iterations=0,
+            timed_iterations=1,
+        ).output
+        reference_model_seed: int | None = None
+    else:
+        reference_values = run_pytorch(
+            model_name,
+            device="cpu",
+            input_seed=input_seed,
+            model_seed=model_seed,
+            warmup_iterations=0,
+            timed_iterations=1,
+        ).output.numpy()
+        reference_model_seed = model_seed
+    values = np.ascontiguousarray(reference_values, dtype="<f4")
     values.tofile(destination)
     return ReferenceOutputArtifact(
         model_name=model_name,
         output_path=destination,
         output_shape=tuple(values.shape),
         input_seed=input_seed,
-        model_seed=model_seed,
+        model_seed=reference_model_seed,
         dtype="float32",
         size_bytes=destination.stat().st_size,
     )
@@ -148,13 +170,10 @@ def _parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Write a deterministic float32 NCHW input binary for native runners."
     )
-    parser.add_argument("--model", choices=available_models(), default="resnet50")
+    parser.add_argument("--model", choices=NATIVE_ARTIFACT_MODELS, default="resnet50")
+    parser.add_argument("--weights", type=Path, default=YOLO11N_WEIGHTS, help="YOLO11n checkpoint for raw reference output.")
     parser.add_argument("--output", type=Path)
-    parser.add_argument(
-        "--reference-output",
-        type=Path,
-        help="Path for deterministic PyTorch float32 logits used by native parity checks.",
-    )
+    parser.add_argument("--reference-output", type=Path, help="Path for deterministic PyTorch float32 raw output used by native parity checks.")
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--input-seed", type=int, default=DEFAULT_INPUT_SEED)
     parser.add_argument("--model-seed", type=int, default=DEFAULT_MODEL_SEED)
@@ -164,10 +183,12 @@ def _parse_arguments() -> argparse.Namespace:
             f"{arguments.model}_seed{arguments.input_seed}_f32_nchw.bin"
         )
     if arguments.reference_output is None:
-        arguments.reference_output = Path("artifacts/reference_outputs") / (
-            f"{arguments.model}_seed{arguments.model_seed}_input"
-            f"{arguments.input_seed}_f32_logits.bin"
+        suffix = (
+            f"{arguments.model}_input{arguments.input_seed}_f32_raw.bin"
+            if arguments.model == YOLO11N
+            else f"{arguments.model}_seed{arguments.model_seed}_input{arguments.input_seed}_f32_logits.bin"
         )
+        arguments.reference_output = Path("artifacts/reference_outputs") / suffix
     return arguments
 
 
@@ -186,6 +207,7 @@ def main() -> None:
         arguments.reference_output,
         input_seed=arguments.input_seed,
         model_seed=arguments.model_seed,
+        weights=arguments.weights,
     )
     print(json.dumps({"input": artifact.summary(), "reference_output": reference.summary()}, indent=2))
 

@@ -36,9 +36,11 @@ four channels encode boxes and later channels encode COCO class scores. This
 keeps engine parity distinct from NMS policy, image preprocessing, and COCO mAP.
 The Python slice provides PyTorch and ONNX Runtime runners plus an OpenVINO
 CPU runner. All preserve the raw output boundary and explicitly request
-float32 OpenVINO inference for parity. Native C++ is follow-on work because
-its raw-output and post-processing boundaries require a separate native
-contract.
+float32 OpenVINO inference for parity. The native ONNX Runtime CPU/CUDA runner
+uses this same raw-output contract and does not add post-processing.
+Each detection record serializes the raw layout: box-coordinate channel count,
+class and candidate axes, class-channel start, and class count. Parity consumes
+that layout instead of relying on a detector-family-specific channel ordering.
 
 ## CUDA compatibility contract
 
@@ -92,11 +94,11 @@ level task accuracy.
 
 ### Native C++ boundary
 
-The initial native ONNX Runtime CPU and CUDA runners read the same ONNX
-artifacts and support the ResNet-50, MobileNetV3-Large, and EfficientNet-B0
-classification contracts. They validate the same `images`/`logits` names,
-float32 types, and static `[1,3,224,224]`/`[1,1000]` shapes as the Python
-runners. To preserve exact
+The native ONNX Runtime CPU and CUDA runners read the same ONNX artifacts and
+support the ResNet-50, MobileNetV3-Large, and EfficientNet-B0 classification
+contracts plus YOLO11n. Classification validates `images`/`logits`, float32,
+and static `[1,3,224,224]`/`[1,1000]`; YOLO11n validates `images`/`output0`,
+float32, and static `[1,3,640,640]`/`[1,84,8400]`. To preserve exact
 cross-language inputs, Python writes its seeded tensor as a little-endian
 float32 binary artifact; C++ reads those bytes rather than attempting to
 reproduce PyTorch's random-number generator. This input artifact is synthetic
@@ -105,10 +107,13 @@ parity data, never a validation dataset.
 Native C++ CPU and CUDA output are schema-versioned JSON with the same `runner`,
 `model`, `configuration`, `measurement`, `correctness`, and `environment`
 sections. It records raw latency samples and the same interpolated p50/p95/p99
-calculation. Python also saves the matching seeded PyTorch CPU logits as a
-little-endian float32 artifact. Native runners load those logits and record
-maximum absolute error, maximum relative error, and predicted-class agreement.
-This is intentionally not represented as task accuracy.
+calculation. Python also saves the matching seeded PyTorch CPU output as a
+little-endian float32 artifact. Native runners load it and record maximum
+absolute error, maximum relative error, and prediction agreement. For YOLO11n,
+the C++ runner calculates agreement over the highest-scoring class among
+channels 4--83 at each of the 8,400 locations, and emits `model_seed: null` to
+match the pretrained Python records. This is intentionally not represented as
+task accuracy.
 
 The CUDA variant appends ONNX Runtime's CUDA execution provider for device 0
 before creating its session, synchronizes after every warm and timed request,

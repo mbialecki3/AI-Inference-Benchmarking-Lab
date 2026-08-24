@@ -98,6 +98,16 @@ class ModelSpecificCliDefaultsTests(unittest.TestCase):
         self.assertEqual(arguments.model_path, Path("artifacts/yolo11n.onnx"))
         self.assertEqual(arguments.output_dir, Path("results/yolo11n/cpu"))
 
+    def test_yolo_native_artifact_defaults_use_raw_reference_filename(self) -> None:
+        with patch.object(sys, "argv", ["input_artifact", "--model", "yolo11n"]):
+            arguments = input_artifact._parse_arguments()
+
+        self.assertEqual(arguments.output, Path("artifacts/inputs/yolo11n_seed69420_f32_nchw.bin"))
+        self.assertEqual(
+            arguments.reference_output,
+            Path("artifacts/reference_outputs/yolo11n_input69420_f32_raw.bin"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
