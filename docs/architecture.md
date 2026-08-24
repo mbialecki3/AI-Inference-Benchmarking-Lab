@@ -30,6 +30,14 @@ YOLO11 is deliberately pinned rather than silently tracking the newest YOLO fami
 
 OpenCV is shared preprocessing and image I/O. It will also provide visual overlays for detector and segmentation sanity checks. OpenCV DNN can become an additional runner later, but is not conflated with ONNX Runtime or OpenVINO.
 
+YOLO11n begins in a separate detection pipeline. It uses a static `float32`
+`[1,3,640,640]` input and compares raw pre-NMS output tensors, where the first
+four channels encode boxes and later channels encode COCO class scores. This
+keeps engine parity distinct from NMS policy, image preprocessing, and COCO mAP.
+The first slice provides Python PyTorch and ONNX Runtime runners; OpenVINO and
+native C++ are follow-on work because their raw-output and post-processing
+boundaries require their own device-native contracts.
+
 ## CUDA compatibility contract
 
 CUDA is a required execution path for PyTorch and ONNX Runtime. A result is labelled `cuda` only after all of these checks pass:

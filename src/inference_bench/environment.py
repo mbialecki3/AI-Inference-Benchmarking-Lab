@@ -35,6 +35,7 @@ def collect_environment(project_root: Path | str = ".") -> dict[str, Any]:
             "onnxruntime": _package_version("onnxruntime")
             or _package_version("onnxruntime-gpu"),
             "openvino": _package_version("openvino"),
+            "ultralytics": _package_version("ultralytics"),
         },
         "torch": _torch_metadata(),
         "onnxruntime": _onnxruntime_metadata(),

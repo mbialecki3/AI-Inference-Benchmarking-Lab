@@ -117,6 +117,28 @@ provider libraries; it does not copy vendor binaries into the repository or
 modify the Conda environment. The CPU target remains separately buildable on
 hosts without CUDA.
 
+## YOLO11n detection baseline
+
+YOLO11n is a separate detection path: it uses a static `float32 NCHW
+[1,3,640,640]` input and preserves the model's raw pre-NMS tensor. Its parity
+check reports numerical error plus per-candidate winning-class agreement; it is
+not COCO mAP and it does not benchmark post-processing. The first detection
+slice covers PyTorch eager and ONNX Runtime on CPU/CUDA. Native C++ and
+OpenVINO detection runners follow after the raw-output contract is established.
+
+Place the official `yolo11n.pt` checkpoint at `artifacts/yolo11n.pt`, then
+export the static ONNX artifact and record a CUDA ONNX Runtime run:
+
+```bash
+PYTHONPATH=src python -m inference_bench.yolo_export
+PYTHONPATH=src python -m inference_bench.yolo_benchmark \
+  --engine onnxruntime --device cuda:0 --verify-parity
+```
+
+The environment pins Ultralytics 8.4.127. Its YOLO11 model and ONNX export API
+are documented by [Ultralytics](https://docs.ultralytics.com/models/yolo11) and
+[its export guide](https://docs.ultralytics.com/modes/export).
+
 ## Python OpenVINO CPU milestone
 
 The OpenVINO runner loads the validated ResNet-50 ONNX artifact and compiles it
