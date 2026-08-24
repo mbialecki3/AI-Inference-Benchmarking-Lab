@@ -73,6 +73,24 @@ class ModelSpecificCliDefaultsTests(unittest.TestCase):
             Path("artifacts/reference_outputs/mobilenet_v3_large_seed12_input11_f32_logits.bin"),
         )
 
+    def test_efficientnet_b0_defaults_to_its_own_artifacts(self) -> None:
+        with patch.object(sys, "argv", ["onnx_export", "--model", "efficientnet_b0"]):
+            self.assertEqual(
+                onnx_export._parse_arguments().output,
+                Path("artifacts/efficientnet_b0.onnx"),
+            )
+        with patch.object(sys, "argv", ["input_artifact", "--model", "efficientnet_b0"]):
+            arguments = input_artifact._parse_arguments()
+
+        self.assertEqual(
+            arguments.output,
+            Path("artifacts/inputs/efficientnet_b0_seed69420_f32_nchw.bin"),
+        )
+        self.assertEqual(
+            arguments.reference_output,
+            Path("artifacts/reference_outputs/efficientnet_b0_seed67_input69420_f32_logits.bin"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -15,24 +15,25 @@ The primary runtime target is **Ubuntu on WSL2**. Windows is the host only; the 
 
 See [the architecture guide](docs/architecture.md) for the model suite, execution matrix, and measurement rules.
 
-## Current milestone: second classification-model benchmark slice
+## Current milestone: third classification-model benchmark slice
 
-The benchmark matrix now supports both ResNet-50 and MobileNetV3-Large. Both
-use the same static `float32 NCHW [1,3,224,224]` input and produce 1,000-class
-logits, so they exercise the same PyTorch, ONNX Runtime, OpenVINO, result, and
-native C++ measurement contracts. Model-specific CLI defaults prevent a
-MobileNet command from accidentally consuming the ResNet-50 artifact.
+The benchmark matrix now supports ResNet-50, MobileNetV3-Large, and
+EfficientNet-B0. They use the same static `float32 NCHW [1,3,224,224]` input
+and produce 1,000-class logits, so they exercise the same PyTorch, ONNX
+Runtime, OpenVINO, result, and native C++ measurement contracts. Model-specific
+CLI defaults prevent one model command from accidentally consuming another
+model's artifact.
 
-Export the MobileNetV3-Large artifact and its paired native inputs:
+Export the EfficientNet-B0 artifact and its paired native inputs:
 
 ```bash
-PYTHONPATH=src python -m inference_bench.onnx_export --model mobilenet_v3_large
-PYTHONPATH=src python -m inference_bench.input_artifact --model mobilenet_v3_large
+PYTHONPATH=src python -m inference_bench.onnx_export --model efficientnet_b0
+PYTHONPATH=src python -m inference_bench.input_artifact --model efficientnet_b0
 ```
 
-Then run any Python engine with `--model mobilenet_v3_large`; its default ONNX
-path is `artifacts/mobilenet_v3_large.onnx`. Native runners accept the same
-model name and use a model-specific default ONNX and reference-output path.
+Then run any Python engine with `--model efficientnet_b0`; its default ONNX
+path is `artifacts/efficientnet_b0.onnx`. Native runners accept the same model
+name and use a model-specific default ONNX and reference-output path.
 
 ## Native ONNX Runtime C++ CPU and CUDA
 
@@ -160,7 +161,7 @@ PYTHONPATH=src python -m inference_bench.benchmark --engine openvino --device cp
 
 When `--output-dir` is omitted, each command writes one JSON record to
 `results/<model>/<device>/`; for example,
-`results/resnet50/cpu/` or `results/mobilenet_v3_large/cuda_0/`. The `cuda:0`
+`results/resnet50/cpu/` or `results/efficientnet_b0/cuda_0/`. The `cuda:0`
 device label is normalized to `cuda_0` so the same layout works on Windows and
 Linux. Supplying `--output-dir` overrides this convention. The first benchmark
 scope is warm inference; cold process startup/model-load timing and device-only

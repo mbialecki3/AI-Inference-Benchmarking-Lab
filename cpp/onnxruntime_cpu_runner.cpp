@@ -142,7 +142,8 @@ void print_usage(std::ostream& stream) {
            << "python -m inference_bench.input_artifact.\n"
            << "\n"
            << "Options:\n"
-           << "  --model NAME         resnet50 or mobilenet_v3_large (default: resnet50)\n"
+           << "  --model NAME         resnet50, mobilenet_v3_large, or efficientnet_b0 "
+              "(default: resnet50)\n"
            << "  --model-path PATH    ONNX artifact (default: artifacts/<model>.onnx)\n"
            << "  --input-file PATH    Required deterministic float32 input binary\n"
            << "  --reference-output PATH  PyTorch float32 logits for numerical parity\n"
@@ -165,8 +166,9 @@ Options parse_arguments(int argc, char* argv[]) {
         }
         if (argument == "--model") {
             const auto model = require_value(index, argc, argv, argument);
-            if (model != "resnet50" && model != "mobilenet_v3_large") {
-                fail("Supported native models: resnet50, mobilenet_v3_large.");
+            if (model != "resnet50" && model != "mobilenet_v3_large"
+                && model != "efficientnet_b0") {
+                fail("Supported native models: resnet50, mobilenet_v3_large, efficientnet_b0.");
             }
             options.model_name = model;
         } else if (argument == "--model-path") {

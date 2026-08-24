@@ -63,6 +63,21 @@ class InputArtifactTests(unittest.TestCase):
         self.assertEqual(input_artifact.dtype, "float32")
         self.assertEqual(output_artifact.dtype, "float32")
 
+    def test_efficientnet_input_and_reference_artifacts_preserve_the_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            input_artifact = export_input_artifact(
+                "efficientnet_b0", directory / "efficientnet_input.bin"
+            )
+            output_artifact = export_reference_output_artifact(
+                "efficientnet_b0", directory / "efficientnet_logits.bin"
+            )
+
+        self.assertEqual(input_artifact.input_shape, (1, 3, 224, 224))
+        self.assertEqual(output_artifact.output_shape, (1, 1000))
+        self.assertEqual(input_artifact.dtype, "float32")
+        self.assertEqual(output_artifact.dtype, "float32")
+
 
 if __name__ == "__main__":
     unittest.main()

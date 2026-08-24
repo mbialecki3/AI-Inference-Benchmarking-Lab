@@ -38,6 +38,21 @@ class PyTorchReferenceTests(unittest.TestCase):
         self.assertEqual(first.output.shape, (1, 1000))
         self.assertTrue(torch.equal(first.output, second.output))
 
+    def test_efficientnet_b0_produces_deterministic_cpu_logits(self) -> None:
+        run_arguments = {
+            "device": "cpu",
+            "input_seed": 69420,
+            "model_seed": 67,
+            "warmup_iterations": 0,
+            "timed_iterations": 1,
+        }
+
+        first = run_pytorch("efficientnet_b0", **run_arguments)
+        second = run_pytorch("efficientnet_b0", **run_arguments)
+
+        self.assertEqual(first.output.shape, (1, 1000))
+        self.assertTrue(torch.equal(first.output, second.output))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -83,9 +83,10 @@ level task accuracy.
 ### Native C++ boundary
 
 The initial native ONNX Runtime CPU and CUDA runners read the same ONNX
-artifacts and support the ResNet-50 and MobileNetV3-Large classification
-contracts. They validate the same `images`/`logits` names, float32 types, and
-static `[1,3,224,224]`/`[1,1000]` shapes as the Python runners. To preserve exact
+artifacts and support the ResNet-50, MobileNetV3-Large, and EfficientNet-B0
+classification contracts. They validate the same `images`/`logits` names,
+float32 types, and static `[1,3,224,224]`/`[1,1000]` shapes as the Python
+runners. To preserve exact
 cross-language inputs, Python writes its seeded tensor as a little-endian
 float32 binary artifact; C++ reads those bytes rather than attempting to
 reproduce PyTorch's random-number generator. This input artifact is synthetic

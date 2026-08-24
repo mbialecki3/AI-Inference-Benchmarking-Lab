@@ -93,6 +93,30 @@ class OnnxRunnerTests(unittest.TestCase):
             atol=1e-5,
         )
 
+    def test_efficientnet_b0_cpu_output_matches_pytorch_reference(self) -> None:
+        model_path = Path(self.temporary_directory.name) / "efficientnet_b0.onnx"
+        export_onnx_quietly("efficientnet_b0", model_path)
+        onnx_result = run_onnx(
+            "efficientnet_b0",
+            model_path,
+            warmup_iterations=0,
+            timed_iterations=1,
+        )
+        pytorch_result = run_pytorch(
+            "efficientnet_b0",
+            device="cpu",
+            warmup_iterations=0,
+            timed_iterations=1,
+        )
+
+        self.assertEqual(onnx_result.output.shape, (1, 1000))
+        np.testing.assert_allclose(
+            onnx_result.output,
+            pytorch_result.output.numpy(),
+            rtol=1e-4,
+            atol=1e-5,
+        )
+
     @unittest.skipUnless(
         CUDA_EXECUTION_PROVIDER in ort.get_available_providers()
         and torch.cuda.is_available(),
