@@ -18,4 +18,5 @@ dependencies:
       - onnxscript==0.7.1
       # Python CPU runtime for the next engine in the initial matrix.
       - openvino==2026.3.0
+      - matplotlib==3.11.1
       - psutil==7.2.2

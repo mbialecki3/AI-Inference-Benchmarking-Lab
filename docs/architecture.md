@@ -106,6 +106,17 @@ provider is a dynamically loaded plug-in. CMake keeps the required loader
 symlinks in the ignored build tree rather than copying or modifying vendor
 libraries.
 
+### Comparison reporting
+
+The reporting command consumes schema-v1 JSON from both Python persistence and
+native C++ standard output. It selects the latest record per engine from one
+comparison group whose model, device, input shape/seeds, warmup count, and timed
+request count are identical. A Markdown table reports mean and tail latency,
+throughput, RSS, and parity agreement; two Matplotlib PNG plots present mean
+latency and throughput. The renderer uses Matplotlib's non-interactive `Agg`
+backend for WSL and CI. Missing or protocol-incompatible runners are
+reported as coverage gaps instead of being included in a misleading chart.
+
 ## Directory plan
 
 ```text

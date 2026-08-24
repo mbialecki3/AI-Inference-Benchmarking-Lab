@@ -145,6 +145,37 @@ device-only CUDA-event timing remain later measurement additions. Engine-
 specific settings, including OpenVINO's `inference_precision: f32`, are stored
 under `runner.configuration` in every result record.
 
+## Comparison reports and plots
+
+Generate a reproducible Markdown comparison and two Matplotlib PNG bar plots from saved
+schema-v1 records:
+
+```bash
+PYTHONPATH=src python -m inference_bench.reporting results --output-dir reports
+```
+
+The report selects the latest run per engine only within the largest group with
+the same model, device, input shape/seeds, and warm-run configuration. This
+avoids silently comparing a CPU run to a CUDA run or two different benchmark
+protocols. It produces `comparison.md`, `mean_latency_ms.png`, and
+`throughput_samples_per_second.png`. The pinned Matplotlib dependency uses its
+non-interactive `Agg` backend, so report generation works in WSL and CI without
+a display server.
+
+Native C++ runners write their schema-v1 JSON to standard output. Save that
+output alongside the Python records before generating the report:
+
+```bash
+./build/cpp/cpp/onnxruntime_cpu_runner \
+  --model-path artifacts/resnet50.onnx \
+  --input-file artifacts/inputs/resnet50_seed69420_f32_nchw.bin \
+  --reference-output artifacts/reference_outputs/resnet50_seed67_input69420_f32_logits.bin \
+  > results/onnxruntime_cpp_cpu.json
+```
+
+The coverage section makes missing or protocol-incompatible engines explicit;
+it never fabricates a C++ result when one has not been recorded.
+
 ## Tests
 
 For concise, readable test output with timings, run:
