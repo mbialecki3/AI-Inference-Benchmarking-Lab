@@ -130,16 +130,23 @@ without changing the parity contract. The detection slice
 covers PyTorch eager and ONNX Runtime on CPU/CUDA plus OpenVINO `CPU` with an
 explicit float32 inference hint, and native C++ ONNX Runtime on CPU/CUDA.
 
+Detection entry points are model-generic: pass `--model` to
+`inference_bench.detection_export` and `inference_bench.detection_benchmark`.
+YOLO11n is the first registered detector; adding the next detector means adding
+one explicit static contract to the registry rather than another runner stack.
+
 Place the official `yolo11n.pt` checkpoint at `artifacts/yolo11n.pt`, then
 export the static ONNX artifact and record a CUDA ONNX Runtime run:
 
 ```bash
-PYTHONPATH=src python -m inference_bench.yolo_export
-PYTHONPATH=src python -m inference_bench.yolo_benchmark \
+PYTHONPATH=src python -m inference_bench.detection_export --model yolo11n
+PYTHONPATH=src python -m inference_bench.detection_benchmark \
+  --model yolo11n \
   --engine onnxruntime --device cuda:0 --verify-parity
 
 # Compile the same static ONNX raw-output artifact for OpenVINO CPU.
-PYTHONPATH=src python -m inference_bench.yolo_benchmark \
+PYTHONPATH=src python -m inference_bench.detection_benchmark \
+  --model yolo11n \
   --engine openvino --device cpu --verify-parity
 
 # Create byte-identical native input/reference artifacts, then run C++ CPU.

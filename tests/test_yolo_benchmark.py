@@ -7,16 +7,16 @@ from unittest.mock import patch
 
 import numpy as np
 
-from inference_bench.yolo_benchmark import benchmark_yolo_openvino
-from inference_bench.yolo_runner import YoloRun
+from inference_bench.detection_benchmark import benchmark_detection_openvino
+from inference_bench.detection_runner import DetectionRun
 
 
 class YoloBenchmarkTests(unittest.TestCase):
-    @patch("inference_bench.yolo_benchmark.sample_gpu_telemetry", return_value={"status": "unavailable"})
-    @patch("inference_bench.yolo_benchmark.process_rss_bytes", return_value={"status": "available", "value": 1, "unit": "bytes"})
-    @patch("inference_bench.yolo_benchmark.collect_environment", return_value={"git_revision": "test"})
-    @patch("inference_bench.yolo_benchmark.run_yolo_pytorch")
-    @patch("inference_bench.yolo_benchmark.run_yolo_openvino")
+    @patch("inference_bench.detection_benchmark.sample_gpu_telemetry", return_value={"status": "unavailable"})
+    @patch("inference_bench.detection_benchmark.process_rss_bytes", return_value={"status": "available", "value": 1, "unit": "bytes"})
+    @patch("inference_bench.detection_benchmark.collect_environment", return_value={"git_revision": "test"})
+    @patch("inference_bench.detection_benchmark.run_detection_pytorch")
+    @patch("inference_bench.detection_benchmark.run_detection_openvino")
     def test_openvino_record_includes_raw_output_contract_and_parity(
         self,
         run_openvino_mock: object,
@@ -30,17 +30,17 @@ class YoloBenchmarkTests(unittest.TestCase):
             artifact.write_bytes(b"onnx")
             output = np.zeros((1, 84, 2), dtype=np.float32)
             output[:, 4, :] = 1.0
-            run_openvino_mock.return_value = YoloRun(
+            run_openvino_mock.return_value = DetectionRun(
                 "openvino", artifact, "cpu", (1, 3, 640, 640), 7, 1, 2,
                 output, (2.0, 4.0), ("CPU",),
             )
-            run_pytorch_mock.return_value = YoloRun(
+            run_pytorch_mock.return_value = DetectionRun(
                 "pytorch_eager", Path("weights.pt"), "cpu", (1, 3, 640, 640), 7, 0, 1,
                 output.copy(), (1.0,), (),
             )
 
-            result = benchmark_yolo_openvino(
-                artifact, "weights.pt", warmup_iterations=1, timed_iterations=2, verify_parity=True
+            result = benchmark_detection_openvino(
+                "yolo11n", artifact, "weights.pt", warmup_iterations=1, timed_iterations=2, verify_parity=True
             )
 
         record = result.summary()

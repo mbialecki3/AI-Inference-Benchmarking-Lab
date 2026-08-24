@@ -1,4 +1,4 @@
-"""Shared contracts for the initial YOLO11n detection benchmark slice."""
+"""Detector contracts, raw-output layouts, and shared parity helpers."""
 
 from __future__ import annotations
 
@@ -60,6 +60,20 @@ class DetectionLayout:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class DetectionModelSpec:
+    """Static contract for one detector available to the benchmark runners."""
+
+    name: str
+    input_name: str
+    output_name: str
+    input_shape: tuple[int, ...]
+    output_shape: tuple[int, ...]
+    weights_path: Path
+    onnx_path: Path
+    layout: DetectionLayout
+
+
 YOLO11N_LAYOUT = DetectionLayout(
     output="raw_pre_nms",
     box_coordinate_channels=4,
@@ -68,50 +82,85 @@ YOLO11N_LAYOUT = DetectionLayout(
     class_channel_start=4,
     class_count=80,
 )
+YOLO11N_SPEC = DetectionModelSpec(
+    name=YOLO11N,
+    input_name="images",
+    output_name="output0",
+    input_shape=YOLO11N_INPUT_SHAPE,
+    output_shape=YOLO11N_OUTPUT_SHAPE,
+    weights_path=YOLO11N_WEIGHTS,
+    onnx_path=YOLO11N_ONNX,
+    layout=YOLO11N_LAYOUT,
+)
+_DETECTION_MODELS = {YOLO11N_SPEC.name: YOLO11N_SPEC}
+
+
+def available_detection_models() -> tuple[str, ...]:
+    """Return detector names accepted by the generic benchmark entry points."""
+
+    return tuple(_DETECTION_MODELS)
+
+
+def get_detection_model_spec(model_name: str) -> DetectionModelSpec:
+    """Return one detector's explicit static raw-output contract."""
+
+    try:
+        return _DETECTION_MODELS[model_name]
+    except KeyError as error:
+        supported = ", ".join(available_detection_models())
+        raise ValueError(f"Unsupported detection model {model_name!r}. Supported: {supported}.") from error
 
 
 def make_detection_input(
-    *, batch_size: int | None = None, seed: int = 69420, device: str | torch.device = "cpu"
+    model_name: str = YOLO11N,
+    *,
+    batch_size: int | None = None,
+    seed: int = 69420,
+    device: str | torch.device = "cpu",
 ) -> torch.Tensor:
     """Return a repeatable float32 NCHW tensor for raw detection parity."""
 
-    resolved_batch_size = YOLO11N_INPUT_SHAPE[0] if batch_size is None else batch_size
+    spec = get_detection_model_spec(model_name)
+    resolved_batch_size = spec.input_shape[0] if batch_size is None else batch_size
     if isinstance(resolved_batch_size, bool) or not isinstance(resolved_batch_size, int) or resolved_batch_size <= 0:
         raise ValueError("batch_size must be a positive integer.")
     generator = torch.Generator(device="cpu")
     generator.manual_seed(seed)
     return torch.rand(
-        (resolved_batch_size, *YOLO11N_INPUT_SHAPE[1:]),
+        (resolved_batch_size, *spec.input_shape[1:]),
         generator=generator,
         dtype=torch.float32,
     ).to(device=device).contiguous()
 
 
-def load_yolo11n(weights: Path | str) -> Any:
-    """Load an explicit YOLO11n checkpoint without hiding a package dependency."""
+def load_detection_model(model_name: str, weights: Path | str) -> Any:
+    """Load one registered detector's eager implementation from explicit weights."""
 
+    spec = get_detection_model_spec(model_name)
     path = Path(weights)
     if not path.is_file():
         raise FileNotFoundError(
-            f"YOLO11n weights do not exist: {path}. Download the official checkpoint "
+            f"{spec.name} weights do not exist: {path}. Download the official checkpoint "
             f"to that path before running this benchmark."
         )
+    if spec.name != YOLO11N:
+        raise RuntimeError(f"No eager loader is registered for {spec.name}.")
     try:
         from ultralytics import YOLO
     except ModuleNotFoundError as error:
         raise RuntimeError(
-            "YOLO11n support requires the pinned 'ultralytics' package. "
+            f"{spec.name} support requires the pinned 'ultralytics' package. "
             "Create the environment from environment.yml."
         ) from error
     return YOLO(str(path))
 
 
 def raw_detection_tensor(value: object) -> torch.Tensor:
-    """Normalize Ultralytics eager output to its raw pre-NMS prediction tensor."""
+    """Normalize one eager detector result to its rank-three raw prediction tensor."""
 
     candidate = value[0] if isinstance(value, tuple) else value
     if not isinstance(candidate, torch.Tensor) or candidate.ndim != 3:
-        raise TypeError("YOLO11n must return one rank-3 raw detection tensor.")
+        raise TypeError("The detector must return one rank-3 raw detection tensor.")
     return candidate
 
 

@@ -89,7 +89,7 @@ class InputArtifactTests(unittest.TestCase):
             input_artifact = export_input_artifact("yolo11n", input_path)
             expected_output = np.arange(np.prod(YOLO11N_OUTPUT_SHAPE), dtype=np.float32).reshape(YOLO11N_OUTPUT_SHAPE)
             with patch(
-                "inference_bench.input_artifact.run_yolo_pytorch",
+                "inference_bench.input_artifact.run_detection_pytorch",
                 return_value=SimpleNamespace(output=expected_output),
             ):
                 output_artifact = export_reference_output_artifact(

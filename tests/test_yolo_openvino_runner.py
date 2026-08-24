@@ -10,7 +10,7 @@ from onnx import TensorProto, helper
 
 from inference_bench.detection import YOLO11N_INPUT_SHAPE, YOLO11N_OUTPUT_SHAPE
 from inference_bench.openvino_runner import CPU_DEVICE
-from inference_bench.yolo_openvino_runner import run_yolo_openvino
+from inference_bench.detection_openvino_runner import run_detection_openvino
 
 
 class YoloOpenVinoRunnerTests(unittest.TestCase):
@@ -19,8 +19,8 @@ class YoloOpenVinoRunnerTests(unittest.TestCase):
             model_path = Path(temporary_directory) / "yolo11n.onnx"
             _write_static_raw_detection_model(model_path)
 
-            result = run_yolo_openvino(
-                model_path,
+            result = run_detection_openvino(
+                "yolo11n", model_path,
                 warmup_iterations=0,
                 timed_iterations=1,
             )
@@ -40,14 +40,14 @@ class YoloOpenVinoRunnerTests(unittest.TestCase):
             model_path = Path(temporary_directory) / "yolo11n.onnx"
             _write_static_raw_detection_model(model_path)
             with self.assertRaisesRegex(ValueError, "only cpu"):
-                run_yolo_openvino(model_path, device="cuda:0", warmup_iterations=0, timed_iterations=1)
+                run_detection_openvino("yolo11n", model_path, device="cuda:0", warmup_iterations=0, timed_iterations=1)
 
     def test_incorrect_raw_output_shape_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             model_path = Path(temporary_directory) / "wrong_output.onnx"
             _write_static_raw_detection_model(model_path, output_shape=(1, 85, 8400))
             with self.assertRaisesRegex(ValueError, "raw output shape"):
-                run_yolo_openvino(model_path, warmup_iterations=0, timed_iterations=1)
+                run_detection_openvino("yolo11n", model_path, warmup_iterations=0, timed_iterations=1)
 
 
 def _write_static_raw_detection_model(

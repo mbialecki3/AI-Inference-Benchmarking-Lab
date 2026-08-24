@@ -17,11 +17,15 @@ import numpy as np
 from inference_bench.inputs import DEFAULT_INPUT_SEED, make_input
 from inference_bench.models import available_models
 from inference_bench.pytorch_runner import DEFAULT_MODEL_SEED, run_pytorch
-from inference_bench.detection import YOLO11N, YOLO11N_WEIGHTS, make_detection_input
-from inference_bench.yolo_runner import run_yolo_pytorch
+from inference_bench.detection import (
+    available_detection_models,
+    get_detection_model_spec,
+    make_detection_input,
+)
+from inference_bench.detection_runner import run_detection_pytorch
 
 
-NATIVE_ARTIFACT_MODELS = (*available_models(), YOLO11N)
+NATIVE_ARTIFACT_MODELS = (*available_models(), *available_detection_models())
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,8 +95,8 @@ def export_input_artifact(
 
     destination = Path(output_path)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    if model_name == YOLO11N:
-        tensor = make_detection_input(batch_size=batch_size, seed=input_seed, device="cpu")
+    if model_name in available_detection_models():
+        tensor = make_detection_input(model_name, batch_size=batch_size, seed=input_seed, device="cpu")
     else:
         tensor = make_input(
             model_name,
@@ -132,10 +136,11 @@ def export_reference_output_artifact(
 
     destination = Path(output_path)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    if model_name == YOLO11N:
+    if model_name in available_detection_models():
         if weights is None:
-            raise ValueError("YOLO11n reference-output artifacts require an explicit weights path.")
-        reference_values = run_yolo_pytorch(
+            raise ValueError("Detection reference-output artifacts require explicit weights.")
+        reference_values = run_detection_pytorch(
+            model_name,
             weights,
             device="cpu",
             input_seed=input_seed,
@@ -171,7 +176,7 @@ def _parse_arguments() -> argparse.Namespace:
         description="Write a deterministic float32 NCHW input binary for native runners."
     )
     parser.add_argument("--model", choices=NATIVE_ARTIFACT_MODELS, default="resnet50")
-    parser.add_argument("--weights", type=Path, default=YOLO11N_WEIGHTS, help="YOLO11n checkpoint for raw reference output.")
+    parser.add_argument("--weights", type=Path, help="Detector checkpoint for raw reference output.")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--reference-output", type=Path, help="Path for deterministic PyTorch float32 raw output used by native parity checks.")
     parser.add_argument("--batch-size", type=int)
@@ -183,12 +188,12 @@ def _parse_arguments() -> argparse.Namespace:
             f"{arguments.model}_seed{arguments.input_seed}_f32_nchw.bin"
         )
     if arguments.reference_output is None:
-        suffix = (
-            f"{arguments.model}_input{arguments.input_seed}_f32_raw.bin"
-            if arguments.model == YOLO11N
-            else f"{arguments.model}_seed{arguments.model_seed}_input{arguments.input_seed}_f32_logits.bin"
+        suffix = f"{arguments.model}_input{arguments.input_seed}_f32_raw.bin" if arguments.model in available_detection_models() else (
+            f"{arguments.model}_seed{arguments.model_seed}_input{arguments.input_seed}_f32_logits.bin"
         )
         arguments.reference_output = Path("artifacts/reference_outputs") / suffix
+    if arguments.model in available_detection_models():
+        arguments.weights = arguments.weights or get_detection_model_spec(arguments.model).weights_path
     return arguments
 
 

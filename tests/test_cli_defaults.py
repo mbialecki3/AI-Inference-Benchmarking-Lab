@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from inference_bench import benchmark, input_artifact, onnx_export, onnx_runner, openvino_runner, yolo_benchmark
+from inference_bench import benchmark, detection_benchmark, detection_export, input_artifact, onnx_export, onnx_runner, openvino_runner
 
 
 class ModelSpecificCliDefaultsTests(unittest.TestCase):
@@ -91,12 +91,20 @@ class ModelSpecificCliDefaultsTests(unittest.TestCase):
             Path("artifacts/reference_outputs/efficientnet_b0_seed67_input69420_f32_logits.bin"),
         )
 
-    def test_yolo_openvino_uses_detection_artifact_and_cpu_result_scope(self) -> None:
-        with patch.object(sys, "argv", ["yolo_benchmark", "--engine", "openvino"]):
-            arguments = yolo_benchmark._parse_arguments()
+    def test_detection_openvino_uses_registered_artifact_and_cpu_result_scope(self) -> None:
+        with patch.object(sys, "argv", ["detection_benchmark", "--engine", "openvino"]):
+            arguments = detection_benchmark._parse_arguments()
 
         self.assertEqual(arguments.model_path, Path("artifacts/yolo11n.onnx"))
         self.assertEqual(arguments.output_dir, Path("results/yolo11n/cpu"))
+
+    def test_detection_export_uses_registered_model_defaults(self) -> None:
+        with patch.object(sys, "argv", ["detection_export"]):
+            arguments = detection_export._parse_arguments()
+
+        self.assertEqual(arguments.model, "yolo11n")
+        self.assertEqual(arguments.weights, Path("artifacts/yolo11n.pt"))
+        self.assertEqual(arguments.output, Path("artifacts/yolo11n.onnx"))
 
     def test_yolo_native_artifact_defaults_use_raw_reference_filename(self) -> None:
         with patch.object(sys, "argv", ["input_artifact", "--model", "yolo11n"]):
