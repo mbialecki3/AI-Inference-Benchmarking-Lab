@@ -15,6 +15,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as pyplot
 
+from inference_bench.output_paths import default_reports_directory
+
 
 SCHEMA_VERSION = 1
 EXPECTED_ENGINES = (
@@ -263,7 +265,7 @@ def write_report(inputs: Iterable[Path | str], output_directory: Path | str = "r
 def _parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Create a Markdown comparison and Matplotlib plots from benchmark JSON records.")
     parser.add_argument("inputs", nargs="*", type=Path, default=[Path("results")], help="JSON record files or directories (default: results)")
-    parser.add_argument("--output-dir", type=Path, default=Path("reports"))
+    parser.add_argument("--output-dir", type=Path)
     return parser.parse_args()
 
 
@@ -271,7 +273,8 @@ def main() -> None:
     """Run the report generator and print the resulting paths."""
 
     arguments = _parse_arguments()
-    paths = write_report(arguments.inputs, arguments.output_dir)
+    output_directory = arguments.output_dir or default_reports_directory(arguments.inputs)
+    paths = write_report(arguments.inputs, output_directory)
     print(json.dumps({name: str(path) for name, path in paths.items()}, indent=2))
 
 

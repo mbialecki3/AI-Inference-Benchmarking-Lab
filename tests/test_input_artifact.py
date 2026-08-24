@@ -48,6 +48,21 @@ class InputArtifactTests(unittest.TestCase):
             self.assertEqual(artifact.size_bytes, expected.nbytes)
             np.testing.assert_array_equal(actual, expected)
 
+    def test_mobilenet_input_and_reference_artifacts_preserve_the_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            input_artifact = export_input_artifact(
+                "mobilenet_v3_large", directory / "mobilenet_input.bin"
+            )
+            output_artifact = export_reference_output_artifact(
+                "mobilenet_v3_large", directory / "mobilenet_logits.bin"
+            )
+
+        self.assertEqual(input_artifact.input_shape, (1, 3, 224, 224))
+        self.assertEqual(output_artifact.output_shape, (1, 1000))
+        self.assertEqual(input_artifact.dtype, "float32")
+        self.assertEqual(output_artifact.dtype, "float32")
+
 
 if __name__ == "__main__":
     unittest.main()

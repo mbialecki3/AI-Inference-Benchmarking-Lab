@@ -9,7 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from torch import nn
-from torchvision.models import resnet50
+from torchvision.models import mobilenet_v3_large, resnet50
 
 
 InputShape = tuple[int, int, int, int]
@@ -42,8 +42,21 @@ RESNET50 = ModelSpec(
     factory=lambda: resnet50(weights=None),
 )
 
+MOBILENET_V3_LARGE = ModelSpec(
+    name="mobilenet_v3_large",
+    task="classification",
+    input_shape=(1, 3, 224, 224),
+    output_description="float32 logits with shape (batch_size, 1000)",
+    # As with ResNet-50, keep this baseline offline and deterministic.  A
+    # pretrained-weight configuration is a separate, explicitly recorded run.
+    factory=lambda: mobilenet_v3_large(weights=None),
+)
 
-MODEL_SPECS: dict[str, ModelSpec] = {RESNET50.name: RESNET50}
+
+MODEL_SPECS: dict[str, ModelSpec] = {
+    RESNET50.name: RESNET50,
+    MOBILENET_V3_LARGE.name: MOBILENET_V3_LARGE,
+}
 
 
 def available_models() -> tuple[str, ...]:

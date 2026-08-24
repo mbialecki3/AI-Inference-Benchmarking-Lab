@@ -127,12 +127,15 @@ def _validate_onnx_model(path: Path) -> None:
 def _parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Export a benchmark model to ONNX.")
     parser.add_argument("--model", choices=available_models(), default="resnet50")
-    parser.add_argument("--output", type=Path, default=Path("artifacts/resnet50.onnx"))
+    parser.add_argument("--output", type=Path)
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--input-seed", type=int, default=DEFAULT_INPUT_SEED)
     parser.add_argument("--model-seed", type=int, default=DEFAULT_MODEL_SEED)
     parser.add_argument("--opset", type=int, default=DEFAULT_OPSET_VERSION)
-    return parser.parse_args()
+    arguments = parser.parse_args()
+    if arguments.output is None:
+        arguments.output = Path("artifacts") / f"{arguments.model}.onnx"
+    return arguments
 
 
 def main() -> None:

@@ -67,6 +67,30 @@ class OpenVinoRunnerTests(unittest.TestCase):
             np.argmax(expected_output, axis=1),
         )
 
+    def test_mobilenet_v3_large_cpu_output_matches_pytorch_reference(self) -> None:
+        model_path = Path(self.temporary_directory.name) / "mobilenet_v3_large.onnx"
+        export_onnx_quietly("mobilenet_v3_large", model_path)
+        openvino_result = run_openvino(
+            "mobilenet_v3_large",
+            model_path,
+            warmup_iterations=0,
+            timed_iterations=1,
+        )
+        pytorch_result = run_pytorch(
+            "mobilenet_v3_large",
+            device="cpu",
+            warmup_iterations=0,
+            timed_iterations=1,
+        )
+
+        self.assertEqual(openvino_result.output.shape, (1, 1000))
+        np.testing.assert_allclose(
+            openvino_result.output,
+            pytorch_result.output.numpy(),
+            rtol=1e-3,
+            atol=1e-4,
+        )
+
     def test_non_cpu_device_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "only cpu"):
             run_openvino(

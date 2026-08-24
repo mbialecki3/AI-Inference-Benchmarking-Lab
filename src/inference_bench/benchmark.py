@@ -14,6 +14,7 @@ from inference_bench.environment import (
 )
 from inference_bench.inputs import DEFAULT_INPUT_SEED
 from inference_bench.models import available_models
+from inference_bench.output_paths import default_results_directory
 from inference_bench.onnx_runner import (
     DEFAULT_TIMED_ITERATIONS as ONNX_DEFAULT_TIMED_ITERATIONS,
     DEFAULT_WARMUP_ITERATIONS as ONNX_DEFAULT_WARMUP_ITERATIONS,
@@ -208,10 +209,15 @@ def _parse_arguments() -> argparse.Namespace:
     parser.add_argument("--model-seed", type=int, default=DEFAULT_MODEL_SEED)
     parser.add_argument("--warmup", type=int)
     parser.add_argument("--iterations", type=int)
-    parser.add_argument("--model-path", type=Path, default=Path("artifacts/resnet50.onnx"))
+    parser.add_argument("--model-path", type=Path)
     parser.add_argument("--verify-parity", action="store_true")
-    parser.add_argument("--output-dir", type=Path, default=Path("results"))
-    return parser.parse_args()
+    parser.add_argument("--output-dir", type=Path)
+    arguments = parser.parse_args()
+    if arguments.model_path is None:
+        arguments.model_path = Path("artifacts") / f"{arguments.model}.onnx"
+    if arguments.output_dir is None:
+        arguments.output_dir = default_results_directory(arguments.model, arguments.device)
+    return arguments
 
 
 def main() -> None:

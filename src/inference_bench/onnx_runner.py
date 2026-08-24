@@ -206,13 +206,16 @@ def _parse_arguments() -> argparse.Namespace:
         description="Run a benchmark ONNX model on CPU or CUDA."
     )
     parser.add_argument("--model", choices=available_models(), default="resnet50")
-    parser.add_argument("--model-path", type=Path, default=Path("artifacts/resnet50.onnx"))
+    parser.add_argument("--model-path", type=Path)
     parser.add_argument("--device", default="cpu", help="cpu or cuda:0")
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--input-seed", type=int, default=DEFAULT_INPUT_SEED)
     parser.add_argument("--warmup", type=int, default=DEFAULT_WARMUP_ITERATIONS)
     parser.add_argument("--iterations", type=int, default=DEFAULT_TIMED_ITERATIONS)
-    return parser.parse_args()
+    arguments = parser.parse_args()
+    if arguments.model_path is None:
+        arguments.model_path = Path("artifacts") / f"{arguments.model}.onnx"
+    return arguments
 
 
 def main() -> None:

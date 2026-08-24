@@ -15,7 +15,26 @@ The primary runtime target is **Ubuntu on WSL2**. Windows is the host only; the 
 
 See [the architecture guide](docs/architecture.md) for the model suite, execution matrix, and measurement rules.
 
-## Current milestone: native ONNX Runtime C++ CPU and CUDA
+## Current milestone: second classification-model benchmark slice
+
+The benchmark matrix now supports both ResNet-50 and MobileNetV3-Large. Both
+use the same static `float32 NCHW [1,3,224,224]` input and produce 1,000-class
+logits, so they exercise the same PyTorch, ONNX Runtime, OpenVINO, result, and
+native C++ measurement contracts. Model-specific CLI defaults prevent a
+MobileNet command from accidentally consuming the ResNet-50 artifact.
+
+Export the MobileNetV3-Large artifact and its paired native inputs:
+
+```bash
+PYTHONPATH=src python -m inference_bench.onnx_export --model mobilenet_v3_large
+PYTHONPATH=src python -m inference_bench.input_artifact --model mobilenet_v3_large
+```
+
+Then run any Python engine with `--model mobilenet_v3_large`; its default ONNX
+path is `artifacts/mobilenet_v3_large.onnx`. Native runners accept the same
+model name and use a model-specific default ONNX and reference-output path.
+
+## Native ONNX Runtime C++ CPU and CUDA
 
 The C++ track now begins with a native ONNX Runtime CPU runner and CMake
 scaffolding. It consumes the same validated `images` → `logits` ONNX artifact,
@@ -139,11 +158,15 @@ Run and save an OpenVINO CPU record with the same parity check:
 PYTHONPATH=src python -m inference_bench.benchmark --engine openvino --device cpu --verify-parity
 ```
 
-Each command writes one JSON file under `results/` by default. The first
-benchmark scope is warm inference; cold process startup/model-load timing and
-device-only CUDA-event timing remain later measurement additions. Engine-
-specific settings, including OpenVINO's `inference_precision: f32`, are stored
-under `runner.configuration` in every result record.
+When `--output-dir` is omitted, each command writes one JSON record to
+`results/<model>/<device>/`; for example,
+`results/resnet50/cpu/` or `results/mobilenet_v3_large/cuda_0/`. The `cuda:0`
+device label is normalized to `cuda_0` so the same layout works on Windows and
+Linux. Supplying `--output-dir` overrides this convention. The first benchmark
+scope is warm inference; cold process startup/model-load timing and device-only
+CUDA-event timing remain later measurement additions. Engine-specific settings,
+including OpenVINO's `inference_precision: f32`, are stored under
+`runner.configuration` in every result record.
 
 ## Comparison reports and plots
 
@@ -151,10 +174,13 @@ Generate a reproducible Markdown comparison and two Matplotlib PNG bar plots fro
 schema-v1 records:
 
 ```bash
-PYTHONPATH=src python -m inference_bench.reporting results --output-dir reports
+PYTHONPATH=src python -m inference_bench.reporting results/resnet50/cpu
 ```
 
-The report selects the latest run per engine only within the largest group with
+For a single `results/<model>/<device>/` input, the report automatically writes
+to the matching `reports/<model>/<device>/` directory. Aggregate input such as
+`results/` retains the historical `reports/` default; `--output-dir` always
+overrides either default. The report selects the latest run per engine only within the largest group with
 the same model, device, input shape/seeds, and warm-run configuration. This
 avoids silently comparing a CPU run to a CUDA run or two different benchmark
 protocols. It produces `comparison.md`, `mean_latency_ms.png`, and
@@ -163,14 +189,17 @@ non-interactive `Agg` backend, so report generation works in WSL and CI without
 a display server.
 
 Native C++ runners write their schema-v1 JSON to standard output. Save that
-output alongside the Python records before generating the report:
+output in the same automatically selected model/device directory before
+generating the report:
 
 ```bash
+mkdir -p results/resnet50/cpu
 ./build/cpp/cpp/onnxruntime_cpu_runner \
+  --model resnet50 \
   --model-path artifacts/resnet50.onnx \
   --input-file artifacts/inputs/resnet50_seed69420_f32_nchw.bin \
   --reference-output artifacts/reference_outputs/resnet50_seed67_input69420_f32_logits.bin \
-  > results/onnxruntime_cpp_cpu.json
+  > results/resnet50/cpu/onnxruntime_cpp_cpu.json
 ```
 
 The coverage section makes missing or protocol-incompatible engines explicit;

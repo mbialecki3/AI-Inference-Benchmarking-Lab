@@ -149,21 +149,26 @@ def _parse_arguments() -> argparse.Namespace:
         description="Write a deterministic float32 NCHW input binary for native runners."
     )
     parser.add_argument("--model", choices=available_models(), default="resnet50")
-    parser.add_argument(
-        "--output",
-        type=Path,
-        default=Path("artifacts/inputs/resnet50_seed69420_f32_nchw.bin"),
-    )
+    parser.add_argument("--output", type=Path)
     parser.add_argument(
         "--reference-output",
         type=Path,
-        default=Path("artifacts/reference_outputs/resnet50_seed67_input69420_f32_logits.bin"),
         help="Path for deterministic PyTorch float32 logits used by native parity checks.",
     )
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--input-seed", type=int, default=DEFAULT_INPUT_SEED)
     parser.add_argument("--model-seed", type=int, default=DEFAULT_MODEL_SEED)
-    return parser.parse_args()
+    arguments = parser.parse_args()
+    if arguments.output is None:
+        arguments.output = Path("artifacts/inputs") / (
+            f"{arguments.model}_seed{arguments.input_seed}_f32_nchw.bin"
+        )
+    if arguments.reference_output is None:
+        arguments.reference_output = Path("artifacts/reference_outputs") / (
+            f"{arguments.model}_seed{arguments.model_seed}_input"
+            f"{arguments.input_seed}_f32_logits.bin"
+        )
+    return arguments
 
 
 def main() -> None:

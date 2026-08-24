@@ -46,7 +46,7 @@ extern "C" cudaError_t cudaRuntimeGetVersion(int* runtime_version);
 
 namespace {
 
-constexpr std::string_view kModelName = "resnet50";
+constexpr std::string_view kDefaultModelName = "resnet50";
 constexpr std::string_view kInputName = "images";
 constexpr std::string_view kOutputName = "logits";
 constexpr std::int64_t kDefaultInputSeed = 69420;
@@ -61,6 +61,7 @@ struct Options {
     std::filesystem::path input_file;
     std::filesystem::path reference_output_file{
         "artifacts/reference_outputs/resnet50_seed67_input69420_f32_logits.bin"};
+    std::string model_name{kDefaultModelName};
     std::int64_t input_seed{kDefaultInputSeed};
     std::int64_t model_seed{kDefaultModelSeed};
     int warmup_iterations{kDefaultWarmupIterations};
@@ -135,13 +136,14 @@ std::int64_t parse_int64(std::string_view value, std::string_view option) {
 void print_usage(std::ostream& stream) {
     stream << "Usage: " << kRunnerExecutable << " --input-file PATH [options]\n"
            << "\n"
-           << "Runs the validated ResNet-50 ONNX artifact with ONNX Runtime's "
+           << "Runs a validated classification ONNX artifact with ONNX Runtime's "
            << kPrimaryProvider << ".\n"
            << "The input file must be the float32 NCHW binary emitted by\n"
            << "python -m inference_bench.input_artifact.\n"
            << "\n"
            << "Options:\n"
-           << "  --model-path PATH    ONNX artifact (default: artifacts/resnet50.onnx)\n"
+           << "  --model NAME         resnet50 or mobilenet_v3_large (default: resnet50)\n"
+           << "  --model-path PATH    ONNX artifact (default: artifacts/<model>.onnx)\n"
            << "  --input-file PATH    Required deterministic float32 input binary\n"
            << "  --reference-output PATH  PyTorch float32 logits for numerical parity\n"
            << "  --input-seed N       Metadata only; must match input artifact (default: 69420)\n"
@@ -153,6 +155,8 @@ void print_usage(std::ostream& stream) {
 
 Options parse_arguments(int argc, char* argv[]) {
     Options options;
+    bool has_model_path = false;
+    bool has_reference_output = false;
     for (int index = 1; index < argc; ++index) {
         const std::string_view argument{argv[index]};
         if (argument == "--help") {
@@ -161,15 +165,18 @@ Options parse_arguments(int argc, char* argv[]) {
         }
         if (argument == "--model") {
             const auto model = require_value(index, argc, argv, argument);
-            if (model != kModelName) {
-                fail("The initial native runner supports only model resnet50.");
+            if (model != "resnet50" && model != "mobilenet_v3_large") {
+                fail("Supported native models: resnet50, mobilenet_v3_large.");
             }
+            options.model_name = model;
         } else if (argument == "--model-path") {
             options.model_path = require_value(index, argc, argv, argument);
+            has_model_path = true;
         } else if (argument == "--input-file") {
             options.input_file = require_value(index, argc, argv, argument);
         } else if (argument == "--reference-output") {
             options.reference_output_file = require_value(index, argc, argv, argument);
+            has_reference_output = true;
         } else if (argument == "--input-seed") {
             options.input_seed = parse_int64(require_value(index, argc, argv, argument), argument);
         } else if (argument == "--model-seed") {
@@ -184,6 +191,14 @@ Options parse_arguments(int argc, char* argv[]) {
     }
     if (options.input_file.empty()) {
         fail("--input-file is required to preserve byte-identical cross-language inputs.");
+    }
+    if (!has_model_path) {
+        options.model_path = std::filesystem::path{"artifacts"} / (options.model_name + ".onnx");
+    }
+    if (!has_reference_output) {
+        options.reference_output_file = std::filesystem::path{"artifacts/reference_outputs"}
+            / (options.model_name + "_seed" + std::to_string(options.model_seed)
+               + "_input" + std::to_string(options.input_seed) + "_f32_logits.bin");
     }
     return options;
 }
@@ -268,7 +283,7 @@ void validate_interface(Ort::Session& session, Ort::AllocatorWithDefaultOptions&
     }
     if (tensor_shape(input_info) != std::vector<std::int64_t>(kInputShape.begin(), kInputShape.end())
         || tensor_shape(output_info) != std::vector<std::int64_t>(kOutputShape.begin(), kOutputShape.end())) {
-        fail("ONNX tensor shapes do not match the validated ResNet-50 contract.");
+        fail("ONNX tensor shapes do not match the validated classification contract.");
     }
 }
 
@@ -585,7 +600,7 @@ void write_result(
     write_number(std::cout, output_sum);
     std::cout << "\n    }\n  },\n"
               << "  \"model\": {\n"
-              << "    \"name\": \"resnet50\",\n"
+              << "    \"name\": \"" << json_escape(options.model_name) << "\",\n"
               << "    \"input_shape\": [1, 3, 224, 224],\n"
               << "    \"input_seed\": " << options.input_seed << ",\n"
               << "    \"model_seed\": " << options.model_seed << ",\n"
