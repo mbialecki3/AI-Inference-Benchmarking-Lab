@@ -42,6 +42,15 @@ Each detection record serializes the raw layout: box-coordinate channel count,
 class and candidate axes, class-channel start, and class count. Parity consumes
 that layout instead of relying on a detector-family-specific channel ordering.
 
+DeepLabV3-ResNet50 is a dedicated segmentation path with static float32
+`images [1,3,224,224]` and `logits [1,21,224,224]` contracts. Its parity metric
+uses the argmax across the class channel at every pixel; it validates engine
+equivalence but is not semantic-segmentation mIoU. The Python matrix covers
+PyTorch eager and ONNX Runtime on CPU/CUDA plus OpenVINO CPU with an explicit
+float32 hint. Native C++ ONNX Runtime has not yet implemented the rank-four
+segmentation output contract, so reports must show that engine as absent rather
+than implying native coverage.
+
 ## CUDA compatibility contract
 
 CUDA is a required execution path for PyTorch and ONNX Runtime. A result is labelled `cuda` only after all of these checks pass:
@@ -98,7 +107,8 @@ The native ONNX Runtime CPU and CUDA runners read the same ONNX artifacts and
 support the ResNet-50, MobileNetV3-Large, and EfficientNet-B0 classification
 contracts plus YOLO11n. Classification validates `images`/`logits`, float32,
 and static `[1,3,224,224]`/`[1,1000]`; YOLO11n validates `images`/`output0`,
-float32, and static `[1,3,640,640]`/`[1,84,8400]`. To preserve exact
+float32, and static `[1,3,640,640]`/`[1,84,8400]`. DeepLabV3's rank-four raw
+logits are not yet a native C++ contract. To preserve exact
 cross-language inputs, Python writes its seeded tensor as a little-endian
 float32 binary artifact; C++ reads those bytes rather than attempting to
 reproduce PyTorch's random-number generator. This input artifact is synthetic

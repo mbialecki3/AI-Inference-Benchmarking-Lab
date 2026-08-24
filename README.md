@@ -168,6 +168,32 @@ The environment pins Ultralytics 8.4.127. Its YOLO11 model and ONNX export API
 are documented by [Ultralytics](https://docs.ultralytics.com/models/yolo11) and
 [its export guide](https://docs.ultralytics.com/modes/export).
 
+## DeepLabV3-ResNet50 segmentation baseline
+
+DeepLabV3-ResNet50 uses its own semantic-segmentation path, rather than the
+classification or detection runners. It benchmarks a static float32
+`[1,3,224,224]` input and preserves raw `[1,21,224,224]` VOC-class logits.
+The optional parity check reports numerical error and per-pixel winning-class
+agreement. It is an engine/export check, not dataset mIoU, image preprocessing,
+or overlay rendering.
+
+The seeded model is deliberately untrained and offline, matching the existing
+classification baselines. Export once, then benchmark PyTorch or ONNX Runtime
+on CPU/CUDA and OpenVINO on CPU:
+
+```bash
+PYTHONPATH=src python -m inference_bench.segmentation_export
+PYTHONPATH=src python -m inference_bench.segmentation_benchmark \
+  --engine onnxruntime --device cuda:0 --verify-parity
+PYTHONPATH=src python -m inference_bench.segmentation_benchmark \
+  --engine openvino --device cpu --verify-parity
+```
+
+OpenVINO remains CPU-only in this environment, so it is intentionally excluded
+from CUDA comparisons. Native C++ ONNX Runtime currently supports classification
+and YOLO11n only; rank-four DeepLab logits are a visible reporting coverage gap,
+not a fabricated native result.
+
 ## Python OpenVINO CPU milestone
 
 The OpenVINO runner loads the validated ResNet-50 ONNX artifact and compiles it

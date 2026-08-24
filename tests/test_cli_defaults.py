@@ -5,7 +5,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from inference_bench import benchmark, detection_benchmark, detection_export, input_artifact, onnx_export, onnx_runner, openvino_runner
+from inference_bench import (
+    benchmark, detection_benchmark, detection_export, input_artifact, onnx_export,
+    onnx_runner, openvino_runner, segmentation_benchmark, segmentation_export,
+)
 
 
 class ModelSpecificCliDefaultsTests(unittest.TestCase):
@@ -115,6 +118,16 @@ class ModelSpecificCliDefaultsTests(unittest.TestCase):
             arguments.reference_output,
             Path("artifacts/reference_outputs/yolo11n_input69420_f32_raw.bin"),
         )
+
+    def test_segmentation_commands_use_the_registered_model_scope(self) -> None:
+        with patch.object(sys, "argv", ["segmentation_export"]):
+            export_arguments = segmentation_export._parse_arguments()
+        with patch.object(sys, "argv", ["segmentation_benchmark", "--engine", "onnxruntime", "--device", "cuda:0"]):
+            benchmark_arguments = segmentation_benchmark._parse_arguments()
+
+        self.assertEqual(export_arguments.output, Path("artifacts/deeplabv3_resnet50.onnx"))
+        self.assertEqual(benchmark_arguments.model_path, Path("artifacts/deeplabv3_resnet50.onnx"))
+        self.assertEqual(benchmark_arguments.output_dir, Path("results/deeplabv3_resnet50/cuda_0"))
 
 
 if __name__ == "__main__":
