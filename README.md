@@ -15,7 +15,7 @@ The primary runtime target is **Ubuntu on WSL2**. Windows is the host only; the 
 
 See [the architecture guide](docs/architecture.md) for the model suite, execution matrix, and measurement rules.
 
-## Current milestone: third classification-model benchmark slice
+## Classification benchmark slices
 
 The benchmark matrix now supports ResNet-50, MobileNetV3-Large, and
 EfficientNet-B0. They use the same static `float32 NCHW [1,3,224,224]` input
@@ -122,9 +122,10 @@ hosts without CUDA.
 YOLO11n is a separate detection path: it uses a static `float32 NCHW
 [1,3,640,640]` input and preserves the model's raw pre-NMS tensor. Its parity
 check reports numerical error plus per-candidate winning-class agreement; it is
-not COCO mAP and it does not benchmark post-processing. The first detection
-slice covers PyTorch eager and ONNX Runtime on CPU/CUDA. Native C++ and
-OpenVINO detection runners follow after the raw-output contract is established.
+not COCO mAP and it does not benchmark post-processing. The detection slice
+covers PyTorch eager and ONNX Runtime on CPU/CUDA plus OpenVINO `CPU` with an
+explicit float32 inference hint. Native C++ detection runners follow after the
+raw-output contract is established.
 
 Place the official `yolo11n.pt` checkpoint at `artifacts/yolo11n.pt`, then
 export the static ONNX artifact and record a CUDA ONNX Runtime run:
@@ -133,6 +134,10 @@ export the static ONNX artifact and record a CUDA ONNX Runtime run:
 PYTHONPATH=src python -m inference_bench.yolo_export
 PYTHONPATH=src python -m inference_bench.yolo_benchmark \
   --engine onnxruntime --device cuda:0 --verify-parity
+
+# Compile the same static ONNX raw-output artifact for OpenVINO CPU.
+PYTHONPATH=src python -m inference_bench.yolo_benchmark \
+  --engine openvino --device cpu --verify-parity
 ```
 
 The environment pins Ultralytics 8.4.127. Its YOLO11 model and ONNX export API

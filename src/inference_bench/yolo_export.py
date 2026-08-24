@@ -10,7 +10,14 @@ from pathlib import Path
 
 import onnx
 
-from inference_bench.detection import YOLO11N, YOLO11N_INPUT_SHAPE, YOLO11N_ONNX, YOLO11N_WEIGHTS, load_yolo11n
+from inference_bench.detection import (
+    YOLO11N,
+    YOLO11N_INPUT_SHAPE,
+    YOLO11N_ONNX,
+    YOLO11N_OUTPUT_SHAPE,
+    YOLO11N_WEIGHTS,
+    load_yolo11n,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,8 +61,10 @@ def export_yolo11n(weights: Path | str, output_path: Path | str) -> YoloExportRe
     )
     if input_shape != YOLO11N_INPUT_SHAPE:
         raise ValueError(f"Expected static YOLO11n input {YOLO11N_INPUT_SHAPE}, got {input_shape}.")
-    if len(output_shape) != 3:
-        raise ValueError(f"Expected rank-3 YOLO11n raw output, got {output_shape}.")
+    if output_shape != YOLO11N_OUTPUT_SHAPE:
+        raise ValueError(
+            f"Expected static YOLO11n raw output {YOLO11N_OUTPUT_SHAPE}, got {output_shape}."
+        )
     return YoloExportResult(YOLO11N, destination, input_shape, output_shape, destination.stat().st_size)
 
 

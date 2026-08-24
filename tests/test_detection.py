@@ -7,6 +7,7 @@ import torch
 
 from inference_bench.detection import (
     YOLO11N_INPUT_SHAPE,
+    YOLO11N_OUTPUT_SHAPE,
     compare_detection_outputs,
     make_detection_input,
     raw_detection_tensor,
@@ -19,6 +20,7 @@ class DetectionContractTests(unittest.TestCase):
         second = make_detection_input(seed=7)
 
         self.assertEqual(tuple(first.shape), YOLO11N_INPUT_SHAPE)
+        self.assertEqual(YOLO11N_OUTPUT_SHAPE, (1, 84, 8400))
         self.assertTrue(torch.equal(first, second))
 
     def test_raw_detection_tensor_accepts_ultralytics_tuple_output(self) -> None:

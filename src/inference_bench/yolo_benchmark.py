@@ -11,6 +11,7 @@ from inference_bench.detection import YOLO11N, YOLO11N_ONNX, YOLO11N_WEIGHTS, co
 from inference_bench.environment import collect_environment, process_rss_bytes, sample_gpu_telemetry
 from inference_bench.output_paths import default_results_directory
 from inference_bench.results import save_result
+from inference_bench.yolo_openvino_runner import run_yolo_openvino
 from inference_bench.yolo_runner import run_yolo_onnx, run_yolo_pytorch
 
 
@@ -35,20 +36,38 @@ def benchmark_yolo_onnx(model_path: Path | str, weights: Path | str, *, device: 
     return _record(run, before, sample_gpu_telemetry(), parity)
 
 
+def benchmark_yolo_openvino(model_path: Path | str, weights: Path | str, *, device: str = "cpu", input_seed: int = 69420,
+                            warmup_iterations: int = 5, timed_iterations: int = 20, verify_parity: bool = False) -> BenchmarkResult:
+    """Benchmark raw YOLO11n OpenVINO CPU inference and optional PyTorch parity."""
+
+    before = sample_gpu_telemetry()
+    run = run_yolo_openvino(model_path, device=device, input_seed=input_seed,
+                            warmup_iterations=warmup_iterations, timed_iterations=timed_iterations)
+    parity = None
+    if verify_parity:
+        reference = run_yolo_pytorch(weights, device="cpu", input_seed=input_seed,
+                                     warmup_iterations=0, timed_iterations=1)
+        parity = compare_detection_outputs(reference.output, run.output)
+    return _record(run, before, sample_gpu_telemetry(), parity)
+
+
 def _record(run: object, before: dict[str, object], after: dict[str, object], parity: object) -> BenchmarkResult:
+    configuration: dict[str, object] = {"task": "detection", "output": "raw_pre_nms", "class_count": 80}
+    if run.engine == "openvino":
+        configuration["inference_precision"] = "f32"
     return BenchmarkResult.create(
         engine=run.engine, model_name=YOLO11N, device=run.device, input_shape=run.input_shape,
         input_seed=run.input_seed, model_seed=None, warmup_iterations=run.warmup_iterations,
         timed_iterations=run.timed_iterations, active_providers=run.active_providers, artifact_path=run.model_path,
         latency_samples_ms=run.latencies_ms, process_rss=process_rss_bytes(), environment=collect_environment(),
         gpu_telemetry_before=before, gpu_telemetry_after=after,
-        engine_configuration={"task": "detection", "output": "raw_pre_nms", "class_count": 80}, parity=parity,
+        engine_configuration=configuration, parity=parity,
     )
 
 
 def _parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Benchmark raw YOLO11n detection inference.")
-    parser.add_argument("--engine", choices=("pytorch", "onnxruntime"), required=True)
+    parser.add_argument("--engine", choices=("pytorch", "onnxruntime", "openvino"), required=True)
     parser.add_argument("--device", default="cpu", help="cpu or cuda:0")
     parser.add_argument("--weights", type=Path, default=YOLO11N_WEIGHTS)
     parser.add_argument("--model-path", type=Path, default=YOLO11N_ONNX)
@@ -68,10 +87,14 @@ def main() -> None:
     if arguments.engine == "pytorch":
         result = benchmark_yolo_pytorch(arguments.weights, device=arguments.device, input_seed=arguments.input_seed,
                                         warmup_iterations=arguments.warmup, timed_iterations=arguments.iterations)
-    else:
+    elif arguments.engine == "onnxruntime":
         result = benchmark_yolo_onnx(arguments.model_path, arguments.weights, device=arguments.device,
                                      input_seed=arguments.input_seed, warmup_iterations=arguments.warmup,
                                      timed_iterations=arguments.iterations, verify_parity=arguments.verify_parity)
+    else:
+        result = benchmark_yolo_openvino(arguments.model_path, arguments.weights, device=arguments.device,
+                                         input_seed=arguments.input_seed, warmup_iterations=arguments.warmup,
+                                         timed_iterations=arguments.iterations, verify_parity=arguments.verify_parity)
     path = save_result(result, arguments.output_dir)
     print(json.dumps({"result_path": str(path), "record": result.summary()}, indent=2))
 

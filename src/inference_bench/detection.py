@@ -13,6 +13,7 @@ from inference_bench.benchmark_result import OutputParity
 
 YOLO11N = "yolo11n"
 YOLO11N_INPUT_SHAPE = (1, 3, 640, 640)
+YOLO11N_OUTPUT_SHAPE = (1, 84, 8400)
 YOLO11N_WEIGHTS = Path("artifacts/yolo11n.pt")
 YOLO11N_ONNX = Path("artifacts/yolo11n.onnx")
 

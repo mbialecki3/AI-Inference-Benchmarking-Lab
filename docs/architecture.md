@@ -34,9 +34,11 @@ YOLO11n begins in a separate detection pipeline. It uses a static `float32`
 `[1,3,640,640]` input and compares raw pre-NMS output tensors, where the first
 four channels encode boxes and later channels encode COCO class scores. This
 keeps engine parity distinct from NMS policy, image preprocessing, and COCO mAP.
-The first slice provides Python PyTorch and ONNX Runtime runners; OpenVINO and
-native C++ are follow-on work because their raw-output and post-processing
-boundaries require their own device-native contracts.
+The Python slice provides PyTorch and ONNX Runtime runners plus an OpenVINO
+CPU runner. All preserve the raw output boundary and explicitly request
+float32 OpenVINO inference for parity. Native C++ is follow-on work because
+its raw-output and post-processing boundaries require a separate native
+contract.
 
 ## CUDA compatibility contract
 

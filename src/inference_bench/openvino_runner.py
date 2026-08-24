@@ -32,6 +32,12 @@ DEFAULT_TIMED_ITERATIONS = 20
 _CORE = ov.Core()
 
 
+def get_openvino_core() -> ov.Core:
+    """Return the process-lifetime OpenVINO core used by CPU runners."""
+
+    return _CORE
+
+
 @dataclass(frozen=True, slots=True)
 class OpenVinoRunResult:
     """The output and warm-run timing data from one OpenVINO CPU run."""
