@@ -141,7 +141,10 @@ class BenchmarkTests(unittest.TestCase):
         record = result.summary()
         self.assertEqual(record["runner"]["engine"], "openvino")
         self.assertEqual(record["runner"]["active_providers"], ["CPU"])
-        self.assertEqual(record["runner"]["configuration"], {"inference_precision": "f32"})
+        self.assertEqual(
+            record["runner"]["configuration"],
+            {"inference_precision": "f32", "performance_hint": "latency"},
+        )
         self.assertEqual(record["model"]["artifact_size_bytes"], 4)
         self.assertEqual(record["correctness"]["parity"]["prediction_agreement"], 1.0)
 

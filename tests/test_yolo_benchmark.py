@@ -57,6 +57,7 @@ class YoloBenchmarkTests(unittest.TestCase):
                 "class_channel_start": 4,
                 "class_count": 80,
                 "inference_precision": "f32",
+                "performance_hint": "latency",
             },
         )
         self.assertEqual(record["model"]["artifact_size_bytes"], 4)

@@ -42,7 +42,7 @@ class SegmentationBenchmarkTests(unittest.TestCase):
         self.assertEqual(record["runner"]["engine"], "openvino")
         self.assertEqual(record["runner"]["configuration"], {
             "task": "semantic_segmentation", "output": "raw_logits", "class_channel_axis": 1,
-            "class_count": 21, "inference_precision": "f32",
+            "class_count": 21, "inference_precision": "f32", "performance_hint": "latency",
         })
         self.assertEqual(record["model"]["model_seed"], 67)
         self.assertEqual(record["correctness"]["parity"]["prediction_agreement"], 1.0)

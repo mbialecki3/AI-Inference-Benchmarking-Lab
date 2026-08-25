@@ -43,6 +43,8 @@ class BenchmarkResultTests(unittest.TestCase):
                 environment={"git_revision": "abc123"},
                 gpu_telemetry_before={"status": "unavailable"},
                 gpu_telemetry_after={"status": "unavailable"},
+                cold_start_model_load_ms=12.5,
+                device_latency_samples_ms=(1.0, 2.0),
             )
 
             record = result.summary()
@@ -52,6 +54,8 @@ class BenchmarkResultTests(unittest.TestCase):
                 record["measurement"]["throughput_samples_per_second"], 666.6666666666666
             )
             self.assertEqual(record["measurement"]["latency_ms"]["p99"], 3.98)
+            self.assertEqual(record["measurement"]["cold_start_model_load_ms"], 12.5)
+            self.assertEqual(record["measurement"]["device_latency_ms"]["samples"], [1.0, 2.0])
             self.assertIsNone(record["correctness"]["parity"])
 
             path = save_result(result, directory / "results")

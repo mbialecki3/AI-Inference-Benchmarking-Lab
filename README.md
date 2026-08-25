@@ -226,8 +226,12 @@ PYTHONPATH=src python -m inference_bench.openvino_runner --device cpu
 
 `inference_bench.benchmark` wraps an existing runner in a shared, versioned
 record. It stores raw warm-run samples; mean, p50, p95, and p99 latency;
-throughput; process RSS; artifact size; package and driver metadata; and
-best-effort GPU telemetry. Missing host telemetry is recorded as
+throughput; a one-off fresh model-load/compile sample; CUDA-event samples for
+PyTorch CUDA; process RSS; artifact size; package and driver metadata; and
+best-effort GPU telemetry. The model-load sample starts inside a fresh runner
+after the Python process has started, so it measures model creation/loading,
+device placement, and session/compile setup—not interpreter process startup.
+Missing host telemetry is recorded as
 `"unavailable"`; it never invalidates an otherwise valid CPU run.
 
 Run and save a PyTorch CPU record:
@@ -253,11 +257,41 @@ When `--output-dir` is omitted, each command writes one JSON record to
 `results/<model>/<device>/`; for example,
 `results/resnet50/cpu/` or `results/efficientnet_b0/cuda_0/`. The `cuda:0`
 device label is normalized to `cuda_0` so the same layout works on Windows and
-Linux. Supplying `--output-dir` overrides this convention. The first benchmark
-scope is warm inference; cold process startup/model-load timing and device-only
-CUDA-event timing remain later measurement additions. Engine-specific settings,
-including OpenVINO's `inference_precision: f32`, are stored under
+Linux. Supplying `--output-dir` overrides this convention. Warm host latency
+remains the comparison primary metric; the separate `cold_start_model_load_ms`
+and optional `device_latency_ms` fields answer different questions and are not
+mixed into it. Engine-specific settings are stored under
 `runner.configuration` in every result record.
+
+## Optimization experiments
+
+All benchmark CLIs preserve the default `fp32`/latency baseline, while allowing
+explicit experiments under the same input, warm-up, and timed-request protocol.
+ONNX Runtime accepts graph optimization, sequential/parallel execution,
+intra/inter-op thread counts, and the CUDA convolution-search option. OpenVINO
+accepts a latency or throughput compilation hint plus `f32`, `f16`, or `bf16`
+inference precision. PyTorch accepts `--precision fp16` only for CUDA.
+
+```bash
+# ONNX Runtime session/provider experiment; parity remains opt-in.
+PYTHONPATH=src python -m inference_bench.benchmark --engine onnxruntime \
+  --device cuda:0 --ort-graph-optimization extended --ort-execution-mode parallel \
+  --ort-intra-op-threads 4 --ort-cuda-conv-algorithm heuristic --verify-parity
+
+# OpenVINO lower-precision/throughput experiment. Synchronous warm requests
+# remain intentionally matched to the baseline; this is not an async pipeline benchmark.
+PYTHONPATH=src python -m inference_bench.benchmark --engine openvino \
+  --openvino-performance-hint throughput --openvino-inference-precision bf16 \
+  --verify-parity
+```
+
+Lower-precision records must retain a parity result before being treated as a
+viable performance variant; for PyTorch `fp16`, `--verify-parity` compares the
+variant to a fresh fp32 reference. Raw-output parity is still not task quality. If the
+project expands to quality evaluation, it needs separately versioned real-data
+evaluators: ImageNet top-1/top-5 for classification, COCO mAP for detection,
+and segmentation mIoU. Those datasets and metrics are deliberately not added
+to the synthetic parity protocol.
 
 ## Comparison reports and plots
 

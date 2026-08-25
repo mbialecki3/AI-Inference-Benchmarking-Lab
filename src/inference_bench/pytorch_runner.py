@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import time
 from dataclasses import dataclass
 
 import torch
@@ -16,6 +15,7 @@ import torch
 from inference_bench.inputs import DEFAULT_INPUT_SEED, make_input
 from inference_bench.metrics import LatencyMetrics
 from inference_bench.models import available_models, build_model
+from inference_bench.timing import elapsed_ms, measure_inference
 
 
 DEFAULT_MODEL_SEED = 67
@@ -40,6 +40,9 @@ class PyTorchRunResult:
     timed_iterations: int
     output: torch.Tensor
     latencies_ms: tuple[float, ...]
+    model_load_ms: float = 0.0
+    device_latencies_ms: tuple[float, ...] = ()
+    precision: str = "fp32"
 
     def summary(self) -> dict[str, object]:
         """Return JSON-friendly metadata without serializing the full output."""
@@ -57,6 +60,12 @@ class PyTorchRunResult:
             "output_dtype": str(self.output.dtype),
             "output_sum": float(self.output.sum().item()),
             "latency_ms": latency.summary(),
+            "cold_start_model_load_ms": self.model_load_ms,
+            "device_latency_ms": (
+                LatencyMetrics.from_samples(self.device_latencies_ms).summary()
+                if self.device_latencies_ms else None
+            ),
+            "precision": self.precision,
         }
 
 
@@ -69,6 +78,7 @@ def run_pytorch(
     model_seed: int = DEFAULT_MODEL_SEED,
     warmup_iterations: int = DEFAULT_WARMUP_ITERATIONS,
     timed_iterations: int = DEFAULT_TIMED_ITERATIONS,
+    precision: str = "fp32",
 ) -> PyTorchRunResult:
     """Run a model in PyTorch eager mode and return its reference output.
 
@@ -80,19 +90,27 @@ def run_pytorch(
     _validate_iteration_counts(warmup_iterations, timed_iterations)
     resolved_device = _resolve_device(device)
 
-    # Model initialization is seeded, then the caller's random state is
-    # restored.  This makes the randomly initialized reference reproducible.
-    with torch.random.fork_rng(devices=[]):
-        torch.manual_seed(model_seed)
-        model = build_model(model_name)
+    if precision not in {"fp32", "fp16"}:
+        raise ValueError("PyTorch precision must be 'fp32' or 'fp16'.")
+    if precision == "fp16" and resolved_device.type != "cuda":
+        raise ValueError("PyTorch fp16 is only supported for CUDA benchmark experiments.")
 
-    model = model.to(resolved_device).eval()
-    input_tensor = make_input(
-        model_name,
-        batch_size=batch_size,
-        seed=input_seed,
-        device=resolved_device,
-    )
+    def prepare() -> tuple[torch.nn.Module, torch.Tensor]:
+        with torch.random.fork_rng(devices=[]):
+            torch.manual_seed(model_seed)
+            model = build_model(model_name)
+        model = model.to(resolved_device).eval()
+        input_tensor = make_input(
+            model_name, batch_size=batch_size, seed=input_seed, device=resolved_device,
+        )
+        if precision == "fp16":
+            model = model.half()
+            input_tensor = input_tensor.half()
+        return model, input_tensor
+
+    # This isolates model construction, device placement, and input staging from
+    # warm request latency. It is deliberately one fresh-run sample, not a mean.
+    (model, input_tensor), model_load_ms = elapsed_ms(prepare)
 
     with torch.inference_mode():
         for _ in range(warmup_iterations):
@@ -100,12 +118,16 @@ def run_pytorch(
         _synchronize(resolved_device)
 
         latencies_ms: list[float] = []
+        device_latencies_ms: list[float] = []
         output: torch.Tensor | None = None
         for _ in range(timed_iterations):
-            started_ns = time.perf_counter_ns()
-            output = model(input_tensor)
+            def infer() -> torch.Tensor:
+                return model(input_tensor)
+            output, host_ms, device_ms = measure_inference(infer, resolved_device)
             _synchronize(resolved_device)
-            latencies_ms.append((time.perf_counter_ns() - started_ns) / 1_000_000)
+            latencies_ms.append(host_ms)
+            if device_ms is not None:
+                device_latencies_ms.append(device_ms)
 
     if not isinstance(output, torch.Tensor):
         raise TypeError(
@@ -122,6 +144,9 @@ def run_pytorch(
         timed_iterations=timed_iterations,
         output=output.detach().cpu().contiguous(),
         latencies_ms=tuple(latencies_ms),
+        model_load_ms=model_load_ms,
+        device_latencies_ms=tuple(device_latencies_ms),
+        precision=precision,
     )
 
 
@@ -159,6 +184,7 @@ def _parse_arguments() -> argparse.Namespace:
     parser.add_argument("--model-seed", type=int, default=DEFAULT_MODEL_SEED)
     parser.add_argument("--warmup", type=int, default=DEFAULT_WARMUP_ITERATIONS)
     parser.add_argument("--iterations", type=int, default=DEFAULT_TIMED_ITERATIONS)
+    parser.add_argument("--precision", choices=("fp32", "fp16"), default="fp32")
     return parser.parse_args()
 
 
@@ -174,6 +200,7 @@ def main() -> None:
         model_seed=arguments.model_seed,
         warmup_iterations=arguments.warmup,
         timed_iterations=arguments.iterations,
+        precision=arguments.precision,
     )
     print(json.dumps(result.summary(), indent=2))
 

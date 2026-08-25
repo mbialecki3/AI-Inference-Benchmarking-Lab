@@ -72,10 +72,17 @@ The framework records two different result families:
 
 ## Measurement contract
 
-- A cold subprocess result reports process startup and model-load time.
+- A fresh-run `cold_start_model_load_ms` sample reports model construction or
+  artifact loading plus runtime session/compile setup. It intentionally excludes
+  Python interpreter process startup; a future subprocess harness can add that
+  broader deployment measurement without contaminating warm-run records.
 - Warm runs report per-request latency percentiles (p50/p95/p99) after warm-up and synchronized CUDA timing.
-- GPU timing uses CUDA events and synchronization. We will separately report end-to-end latency (including host-to-device transfer) and device-only latency, because they answer different deployment questions.
-- The OpenVINO CPU parity runner explicitly selects float32 inference precision. Lower-precision OpenVINO optimizations are valuable later configurations, but they must not be mixed into a reference-equivalence result.
+- CUDA PyTorch runs additionally record device-only CUDA-event samples. ONNX
+  Runtime host timing remains end-to-end because its opaque execution stream
+  cannot be truthfully event-timed without an I/O-binding/user-stream path.
+- ONNX Runtime session/provider settings and OpenVINO performance hints are
+  serializable experiments. OpenVINO defaults to float32/latency; `f16` and
+  `bf16` variants must retain a parity result before interpretation.
 - Throughput is samples per second at an explicit batch size.
 - Process RSS, GPU memory, CPU/GPU utilization, and NVIDIA power are sampled independently of the timed inference loop.
 - Artifact size is measured for the model file(s) consumed by a runner. The
@@ -89,14 +96,16 @@ Every completed warm-run benchmark writes a schema-versioned JSON record. The
 record has `runner`, `model`, `configuration`, `measurement`, `correctness`,
 and `environment` sections. `measurement.latency_ms.samples` preserves every
 warm-run observation, while its summary provides mean/min/max/p50/p95/p99;
-throughput is derived from that mean and the explicit batch size.
+throughput is derived from that mean and the explicit batch size. The separate
+`measurement.cold_start_model_load_ms` and optional
+`measurement.device_latency_ms` sections never replace warm latency.
 
 The first record collector captures process peak RSS and before/after
 `nvidia-smi` samples when available. It stores a structured `unavailable`
 status otherwise. This prevents host-observability gaps from being confused
 with a successful zero-valued metric. Engine-specific configuration belongs in
 `runner.configuration`; for example, OpenVINO records its `f32` inference
-precision there. ONNX Runtime and OpenVINO records can additionally include
+precision and performance hints there. ONNX Runtime and OpenVINO records can additionally include
 parity against the seeded PyTorch reference; this is distinct from dataset-
 level task accuracy.
 

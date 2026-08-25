@@ -17,16 +17,18 @@ from inference_bench.segmentation import (
 )
 from inference_bench.segmentation_openvino_runner import run_segmentation_openvino
 from inference_bench.segmentation_runner import SegmentationRun, run_segmentation_onnx, run_segmentation_pytorch
+from inference_bench.runtime_options import OnnxRuntimeOptions, OpenVinoOptions
 
 
 def benchmark_segmentation_pytorch(
     model_name: str, *, device: str = "cpu", input_seed: int = 69420, model_seed: int = 67,
     warmup_iterations: int = 5, timed_iterations: int = 20,
+    precision: str = "fp32",
 ) -> BenchmarkResult:
     before = sample_gpu_telemetry()
     run = run_segmentation_pytorch(
         model_name, device=device, input_seed=input_seed, model_seed=model_seed,
-        warmup_iterations=warmup_iterations, timed_iterations=timed_iterations,
+        warmup_iterations=warmup_iterations, timed_iterations=timed_iterations, precision=precision,
     )
     return _record(model_name, run, before, sample_gpu_telemetry(), None)
 
@@ -35,11 +37,12 @@ def benchmark_segmentation_onnx(
     model_name: str, model_path: Path | str, *, device: str = "cpu", input_seed: int = 69420,
     model_seed: int = 67, warmup_iterations: int = 5, timed_iterations: int = 20,
     verify_parity: bool = False,
+    runtime_options: OnnxRuntimeOptions | None = None,
 ) -> BenchmarkResult:
     before = sample_gpu_telemetry()
     run = run_segmentation_onnx(
         model_name, model_path, device=device, input_seed=input_seed, model_seed=model_seed,
-        warmup_iterations=warmup_iterations, timed_iterations=timed_iterations,
+        warmup_iterations=warmup_iterations, timed_iterations=timed_iterations, runtime_options=runtime_options,
     )
     parity = _reference_parity(model_name, run, model_seed) if verify_parity else None
     return _record(model_name, run, before, sample_gpu_telemetry(), parity)
@@ -49,11 +52,12 @@ def benchmark_segmentation_openvino(
     model_name: str, model_path: Path | str, *, device: str = "cpu", input_seed: int = 69420,
     model_seed: int = 67, warmup_iterations: int = 5, timed_iterations: int = 20,
     verify_parity: bool = False,
+    runtime_options: OpenVinoOptions | None = None,
 ) -> BenchmarkResult:
     before = sample_gpu_telemetry()
     run = run_segmentation_openvino(
         model_name, model_path, device=device, input_seed=input_seed, model_seed=model_seed,
-        warmup_iterations=warmup_iterations, timed_iterations=timed_iterations,
+        warmup_iterations=warmup_iterations, timed_iterations=timed_iterations, runtime_options=runtime_options,
     )
     parity = _reference_parity(model_name, run, model_seed) if verify_parity else None
     return _record(model_name, run, before, sample_gpu_telemetry(), parity)
@@ -75,7 +79,8 @@ def _record(
 ) -> BenchmarkResult:
     configuration = get_segmentation_model_spec(model_name).benchmark_metadata()
     if run.engine == "openvino":
-        configuration["inference_precision"] = "f32"
+        configuration.update({"inference_precision": "f32", "performance_hint": "latency"})
+    configuration.update(run.runtime_configuration or {})
     return BenchmarkResult.create(
         engine=run.engine, model_name=model_name, device=run.device, input_shape=run.input_shape,
         input_seed=run.input_seed, model_seed=run.model_seed, warmup_iterations=run.warmup_iterations,
@@ -83,6 +88,7 @@ def _record(
         artifact_path=run.model_path, latency_samples_ms=run.latencies_ms, process_rss=process_rss_bytes(),
         environment=collect_environment(), gpu_telemetry_before=before, gpu_telemetry_after=after,
         engine_configuration=configuration, parity=parity,
+        cold_start_model_load_ms=run.model_load_ms, device_latency_samples_ms=run.device_latencies_ms,
     )
 
 
@@ -97,6 +103,14 @@ def _parse_arguments() -> argparse.Namespace:
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--iterations", type=int, default=20)
     parser.add_argument("--verify-parity", action="store_true")
+    parser.add_argument("--precision", choices=("fp32", "fp16"), default="fp32")
+    parser.add_argument("--ort-graph-optimization", choices=("disable", "basic", "extended", "all"), default="all")
+    parser.add_argument("--ort-execution-mode", choices=("sequential", "parallel"), default="sequential")
+    parser.add_argument("--ort-intra-op-threads", type=int)
+    parser.add_argument("--ort-inter-op-threads", type=int)
+    parser.add_argument("--ort-cuda-conv-algorithm", choices=("exhaustive", "heuristic", "default"))
+    parser.add_argument("--openvino-performance-hint", choices=("latency", "throughput"), default="latency")
+    parser.add_argument("--openvino-inference-precision", choices=("f32", "f16", "bf16"), default="f32")
     parser.add_argument("--output-dir", type=Path)
     arguments = parser.parse_args()
     spec = get_segmentation_model_spec(arguments.model)
@@ -113,14 +127,23 @@ def main() -> None:
         warmup_iterations=arguments.warmup, timed_iterations=arguments.iterations,
     )
     if arguments.engine == "pytorch":
-        result = benchmark_segmentation_pytorch(arguments.model, **common)
+        result = benchmark_segmentation_pytorch(arguments.model, precision=arguments.precision, **common)
     elif arguments.engine == "onnxruntime":
         result = benchmark_segmentation_onnx(
-            arguments.model, arguments.model_path, verify_parity=arguments.verify_parity, **common,
+            arguments.model, arguments.model_path, verify_parity=arguments.verify_parity,
+            runtime_options=OnnxRuntimeOptions(
+                graph_optimization_level=arguments.ort_graph_optimization, execution_mode=arguments.ort_execution_mode,
+                intra_op_num_threads=arguments.ort_intra_op_threads, inter_op_num_threads=arguments.ort_inter_op_threads,
+                cuda_conv_algorithm=arguments.ort_cuda_conv_algorithm,
+            ), **common,
         )
     else:
         result = benchmark_segmentation_openvino(
-            arguments.model, arguments.model_path, verify_parity=arguments.verify_parity, **common,
+            arguments.model, arguments.model_path, verify_parity=arguments.verify_parity,
+            runtime_options=OpenVinoOptions(
+                performance_hint=arguments.openvino_performance_hint,
+                inference_precision=arguments.openvino_inference_precision,
+            ), **common,
         )
     path = save_result(result, arguments.output_dir)
     print(json.dumps({"result_path": str(path), "record": result.summary()}, indent=2))

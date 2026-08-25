@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-import time
 from pathlib import Path
 
 import numpy as np
 import openvino as ov
-from openvino.properties import hint
 
 from inference_bench.openvino_runner import CPU_DEVICE, get_openvino_core
 from inference_bench.segmentation import SegmentationModelSpec, get_segmentation_model_spec, make_segmentation_input
 from inference_bench.segmentation_runner import SegmentationRun, _validate_counts
+from inference_bench.runtime_options import OpenVinoOptions
+from inference_bench.timing import elapsed_ms
 
 
 def run_segmentation_openvino(
@@ -23,6 +23,7 @@ def run_segmentation_openvino(
     model_seed: int = 67,
     warmup_iterations: int = 5,
     timed_iterations: int = 20,
+    runtime_options: OpenVinoOptions | None = None,
 ) -> SegmentationRun:
     """Run static raw segmentation logits on OpenVINO CPU.
 
@@ -38,9 +39,12 @@ def run_segmentation_openvino(
 
     core = get_openvino_core()
     _validate_cpu_device(device, core)
-    model = core.read_model(str(path))
-    input_name, output_name = _validate_model_interface(model, spec)
-    compiled_model = core.compile_model(model, CPU_DEVICE, {hint.inference_precision: ov.Type.f32})
+    options = runtime_options or OpenVinoOptions()
+    def load_and_compile() -> tuple[ov.CompiledModel, str, str]:
+        model = core.read_model(str(path))
+        input_name, output_name = _validate_model_interface(model, spec)
+        return core.compile_model(model, CPU_DEVICE, options.compile_configuration()), input_name, output_name
+    (compiled_model, input_name, output_name), model_load_ms = elapsed_ms(load_and_compile)
     active_devices = tuple(str(item) for item in compiled_model.get_property("EXECUTION_DEVICES"))
     if CPU_DEVICE not in active_devices:
         raise RuntimeError(f"OpenVINO did not report CPU as active: {active_devices!r}")
@@ -52,14 +56,14 @@ def run_segmentation_openvino(
     samples: list[float] = []
     output: np.ndarray | None = None
     for _ in range(timed_iterations):
-        started_at = time.perf_counter_ns()
-        output = _run_once(compiled_model, input_name, output_name, inputs, spec)
-        samples.append((time.perf_counter_ns() - started_at) / 1_000_000)
+        output, host_ms = elapsed_ms(lambda: _run_once(compiled_model, input_name, output_name, inputs, spec))
+        samples.append(host_ms)
     if output is None:
         raise RuntimeError(f"{spec.name} did not produce a timed OpenVINO output.")
     return SegmentationRun(
         "openvino", path, "cpu", tuple(inputs.shape), input_seed, model_seed,
         warmup_iterations, timed_iterations, output.copy(), tuple(samples), active_devices,
+        model_load_ms, (), options.summary(),
     )
 
 

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,6 +20,8 @@ from inference_bench.inputs import DEFAULT_INPUT_SEED, make_input
 from inference_bench.metrics import LatencyMetrics
 from inference_bench.models import available_models
 from inference_bench.onnx_export import INPUT_NAME, OUTPUT_NAME
+from inference_bench.runtime_options import OnnxRuntimeOptions
+from inference_bench.timing import elapsed_ms
 
 
 CPU_EXECUTION_PROVIDER = "CPUExecutionProvider"
@@ -43,6 +44,9 @@ class OnnxRunResult:
     active_providers: tuple[str, ...]
     output: np.ndarray
     latencies_ms: tuple[float, ...]
+    model_load_ms: float = 0.0
+    device_latencies_ms: tuple[float, ...] = ()
+    runtime_options: dict[str, object] | None = None
 
     def summary(self) -> dict[str, object]:
         """Return JSON-friendly metadata without serializing the full output."""
@@ -61,6 +65,9 @@ class OnnxRunResult:
             "output_dtype": str(self.output.dtype),
             "output_sum": float(self.output.sum()),
             "latency_ms": latency.summary(),
+            "cold_start_model_load_ms": self.model_load_ms,
+            "device_latency_ms": None,
+            "runtime_options": self.runtime_options or {},
         }
 
 
@@ -73,6 +80,7 @@ def run_onnx(
     input_seed: int = DEFAULT_INPUT_SEED,
     warmup_iterations: int = DEFAULT_WARMUP_ITERATIONS,
     timed_iterations: int = DEFAULT_TIMED_ITERATIONS,
+    runtime_options: OnnxRuntimeOptions | None = None,
 ) -> OnnxRunResult:
     """Run one exported model with the requested ONNX Runtime device.
 
@@ -87,13 +95,18 @@ def run_onnx(
     if not path.is_file():
         raise FileNotFoundError(f"ONNX model does not exist: {path}")
 
-    resolved_device, requested_provider, providers = _resolve_device(device)
-    session = ort.InferenceSession(str(path), providers=providers)
+    resolved_device, requested_provider, _ = _resolve_device(device)
+    options = runtime_options or OnnxRuntimeOptions()
+    def create_session() -> ort.InferenceSession:
+        return ort.InferenceSession(
+            str(path), sess_options=options.session_options(), providers=options.providers(resolved_device),
+        )
+    session, model_load_ms = elapsed_ms(create_session)
     active_providers = tuple(session.get_providers())
     if active_providers[0] != requested_provider:
         raise RuntimeError(
             "ONNX Runtime did not activate the requested execution provider first. "
-            f"Requested: {providers!r}; active: {active_providers!r}"
+            f"Requested: {requested_provider!r}; active: {active_providers!r}"
         )
     _validate_session_interface(session)
 
@@ -112,10 +125,8 @@ def run_onnx(
     latencies_ms: list[float] = []
     output: np.ndarray | None = None
     for _ in range(timed_iterations):
-        started_ns = time.perf_counter_ns()
-        output = _run_once(session, feeds)
-        _synchronize(resolved_device)
-        latencies_ms.append((time.perf_counter_ns() - started_ns) / 1_000_000)
+        output, latency_ms = elapsed_ms(lambda: _synchronized_run(session, feeds, resolved_device))
+        latencies_ms.append(latency_ms)
 
     if output is None:
         raise RuntimeError("ONNX Runtime did not produce a timed output.")
@@ -131,6 +142,8 @@ def run_onnx(
         active_providers=active_providers,
         output=output,
         latencies_ms=tuple(latencies_ms),
+        model_load_ms=model_load_ms,
+        runtime_options=options.summary(),
     )
 
 
@@ -162,6 +175,12 @@ def _synchronize(device: str) -> None:
 
     if device == "cuda:0":
         torch.cuda.synchronize(0)
+
+
+def _synchronized_run(session: ort.InferenceSession, feeds: dict[str, np.ndarray], device: str) -> np.ndarray:
+    output = _run_once(session, feeds)
+    _synchronize(device)
+    return output
 
 
 def _validate_session_interface(session: ort.InferenceSession) -> None:
@@ -212,6 +231,11 @@ def _parse_arguments() -> argparse.Namespace:
     parser.add_argument("--input-seed", type=int, default=DEFAULT_INPUT_SEED)
     parser.add_argument("--warmup", type=int, default=DEFAULT_WARMUP_ITERATIONS)
     parser.add_argument("--iterations", type=int, default=DEFAULT_TIMED_ITERATIONS)
+    parser.add_argument("--ort-graph-optimization", choices=("disable", "basic", "extended", "all"), default="all")
+    parser.add_argument("--ort-execution-mode", choices=("sequential", "parallel"), default="sequential")
+    parser.add_argument("--ort-intra-op-threads", type=int)
+    parser.add_argument("--ort-inter-op-threads", type=int)
+    parser.add_argument("--ort-cuda-conv-algorithm", choices=("exhaustive", "heuristic", "default"))
     arguments = parser.parse_args()
     if arguments.model_path is None:
         arguments.model_path = Path("artifacts") / f"{arguments.model}.onnx"
@@ -230,6 +254,13 @@ def main() -> None:
         input_seed=arguments.input_seed,
         warmup_iterations=arguments.warmup,
         timed_iterations=arguments.iterations,
+        runtime_options=OnnxRuntimeOptions(
+            graph_optimization_level=arguments.ort_graph_optimization,
+            execution_mode=arguments.ort_execution_mode,
+            intra_op_num_threads=arguments.ort_intra_op_threads,
+            inter_op_num_threads=arguments.ort_inter_op_threads,
+            cuda_conv_algorithm=arguments.ort_cuda_conv_algorithm,
+        ),
     )
     print(json.dumps(result.summary(), indent=2))
 

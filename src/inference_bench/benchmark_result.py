@@ -80,6 +80,8 @@ class BenchmarkResult:
     gpu_telemetry_after: dict[str, object]
     engine_configuration: dict[str, Any] = field(default_factory=dict)
     parity: OutputParity | None = None
+    cold_start_model_load_ms: float | None = None
+    device_latency: LatencyMetrics | None = None
 
     @classmethod
     def create(
@@ -102,10 +104,16 @@ class BenchmarkResult:
         gpu_telemetry_after: dict[str, object],
         engine_configuration: Mapping[str, Any] | None = None,
         parity: OutputParity | None = None,
+        cold_start_model_load_ms: float | None = None,
+        device_latency_samples_ms: tuple[float, ...] = (),
     ) -> "BenchmarkResult":
         """Create a result with a stable id, UTC timestamp, and derived metrics."""
 
         latency = LatencyMetrics.from_samples(latency_samples_ms)
+        if cold_start_model_load_ms is not None and (
+            not np.isfinite(cold_start_model_load_ms) or cold_start_model_load_ms < 0
+        ):
+            raise ValueError("cold_start_model_load_ms must be a finite non-negative value.")
         resolved_artifact = Path(artifact_path) if artifact_path is not None else None
         return cls(
             run_id=str(uuid4()),
@@ -130,6 +138,11 @@ class BenchmarkResult:
             gpu_telemetry_after=gpu_telemetry_after,
             engine_configuration=dict(engine_configuration or {}),
             parity=parity,
+            cold_start_model_load_ms=cold_start_model_load_ms,
+            device_latency=(
+                LatencyMetrics.from_samples(device_latency_samples_ms)
+                if device_latency_samples_ms else None
+            ),
         )
 
     def summary(self) -> dict[str, object]:
@@ -165,6 +178,11 @@ class BenchmarkResult:
                 },
                 "throughput_samples_per_second": throughput_samples_per_second(
                     batch_size, self.latency.mean_ms
+                ),
+                "cold_start_model_load_ms": self.cold_start_model_load_ms,
+                "device_latency_ms": (
+                    {**self.device_latency.summary(), "samples": list(self.device_latency.samples_ms)}
+                    if self.device_latency else None
                 ),
                 "process_rss": self.process_rss,
                 "gpu_telemetry": {

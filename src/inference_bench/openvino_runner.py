@@ -9,18 +9,18 @@ from __future__ import annotations
 
 import argparse
 import json
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import openvino as ov
-from openvino.properties import hint
 
 from inference_bench.inputs import DEFAULT_INPUT_SEED, make_input
 from inference_bench.metrics import LatencyMetrics
 from inference_bench.models import available_models
 from inference_bench.onnx_export import INPUT_NAME, OUTPUT_NAME
+from inference_bench.runtime_options import OpenVinoOptions
+from inference_bench.timing import elapsed_ms
 
 
 CPU_DEVICE = "CPU"
@@ -53,6 +53,8 @@ class OpenVinoRunResult:
     inference_precision: str
     output: np.ndarray
     latencies_ms: tuple[float, ...]
+    model_load_ms: float = 0.0
+    performance_hint: str = "latency"
 
     def summary(self) -> dict[str, object]:
         """Return JSON-friendly metadata without serializing the full output."""
@@ -72,6 +74,8 @@ class OpenVinoRunResult:
             "output_dtype": str(self.output.dtype),
             "output_sum": float(self.output.sum()),
             "latency_ms": latency.summary(),
+            "cold_start_model_load_ms": self.model_load_ms,
+            "performance_hint": self.performance_hint,
         }
 
 
@@ -84,6 +88,7 @@ def run_openvino(
     input_seed: int = DEFAULT_INPUT_SEED,
     warmup_iterations: int = DEFAULT_WARMUP_ITERATIONS,
     timed_iterations: int = DEFAULT_TIMED_ITERATIONS,
+    runtime_options: OpenVinoOptions | None = None,
 ) -> OpenVinoRunResult:
     """Run one exported ONNX model with OpenVINO on CPU.
 
@@ -98,15 +103,12 @@ def run_openvino(
         raise FileNotFoundError(f"ONNX model does not exist: {path}")
 
     resolved_device = _resolve_device(device, _CORE)
-    model = _CORE.read_model(str(path))
-    _validate_model_interface(model)
-    # OpenVINO CPU may otherwise select lower-precision kernels. This runner
-    # is a numerical-parity reference, so it explicitly retains float32.
-    compiled_model = _CORE.compile_model(
-        model,
-        CPU_DEVICE,
-        {hint.inference_precision: ov.Type.f32},
-    )
+    options = runtime_options or OpenVinoOptions()
+    def load_and_compile() -> ov.CompiledModel:
+        model = _CORE.read_model(str(path))
+        _validate_model_interface(model)
+        return _CORE.compile_model(model, CPU_DEVICE, options.compile_configuration())
+    compiled_model, model_load_ms = elapsed_ms(load_and_compile)
     active_devices = tuple(
         str(active_device)
         for active_device in compiled_model.get_property("EXECUTION_DEVICES")
@@ -130,9 +132,8 @@ def run_openvino(
     latencies_ms: list[float] = []
     output: np.ndarray | None = None
     for _ in range(timed_iterations):
-        started_ns = time.perf_counter_ns()
-        output = _run_once(compiled_model, input_array)
-        latencies_ms.append((time.perf_counter_ns() - started_ns) / 1_000_000)
+        output, latency_ms = elapsed_ms(lambda: _run_once(compiled_model, input_array))
+        latencies_ms.append(latency_ms)
 
     if output is None:
         raise RuntimeError("OpenVINO did not produce a timed output.")
@@ -151,9 +152,11 @@ def run_openvino(
         warmup_iterations=warmup_iterations,
         timed_iterations=timed_iterations,
         active_devices=active_devices,
-        inference_precision="f32",
+        inference_precision=options.inference_precision,
         output=stable_output,
         latencies_ms=tuple(latencies_ms),
+        model_load_ms=model_load_ms,
+        performance_hint=options.performance_hint,
     )
 
 
