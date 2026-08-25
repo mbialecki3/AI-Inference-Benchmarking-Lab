@@ -4,6 +4,54 @@ This project is a learning-oriented systems benchmark for comparing practical co
 
 The primary runtime target is **Ubuntu on WSL2**. Windows is the host only; the benchmark, CUDA userspace, C++ builds, and result collection run in Linux. The layout is intentionally portable to a native Linux machine.
 
+## Results at a glance
+
+The benchmark uses fixed model/input seeds, five warm-up requests, and twenty
+timed synchronous requests. The following controlled ResNet-50 study ran on
+the project WSL2 host with an RTX 5080. It is evidence for a deployment choice
+on that machine, not a claim that one runtime is universally fastest.
+
+| Engine and configuration | Device | Mean / p95 latency | Throughput | Finding |
+| --- | --- | ---: | ---: | --- |
+| PyTorch eager, fp32 | CUDA | 3.137 / 3.975 ms | 318.8 samples/s | Baseline |
+| PyTorch eager, fp16 | CUDA | 4.675 / 14.567 ms | 213.9 samples/s | Kept 1.0 predicted-class agreement, but was slower with tail outliers. |
+| ONNX Runtime, default session | CUDA | 2.165 / 2.485 ms | 461.9 samples/s | Best tested CUDA result. |
+| ONNX Runtime, extended + parallel + 4 threads + heuristic convolution search | CUDA | 3.121 / 6.325 ms | 320.4 samples/s | Tuning made this workload slower; retain the default configuration. |
+| OpenVINO, f32 + latency hint | CPU | 7.826 / 9.119 ms | 127.8 samples/s | High-fidelity CPU baseline. |
+| OpenVINO, bf16 + throughput hint | CPU | 4.762 / 7.769 ms | 210.0 samples/s | Faster with 1.0 predicted-class agreement, but max raw-logit error increased from 4.96e-05 to 0.244. |
+
+Each result records the model, input shape/seeds, runtime configuration,
+package and driver versions, latency distribution, telemetry, and output-parity
+data. The important outcome is therefore not merely a faster number: it is an
+auditable decision about which deployment configuration is acceptable.
+
+## Quick start
+
+Run these commands inside Ubuntu WSL2 from the repository root. CPU-only
+commands work without an NVIDIA GPU; use `cuda:0` only after the CUDA provider
+and `nvidia-smi` are available in WSL2.
+
+```bash
+conda env create -f environment.yml
+conda activate inference-bench
+
+# Verify the repository first.
+python run_tests.py
+
+# Export a deterministic ResNet-50 ONNX artifact, run a CPU parity benchmark,
+# and render a Markdown report plus PNG plots.
+PYTHONPATH=src python -m inference_bench.onnx_export --model resnet50
+PYTHONPATH=src python -m inference_bench.benchmark \
+  --engine onnxruntime --device cpu --verify-parity
+PYTHONPATH=src python -m inference_bench.reporting results/resnet50/cpu
+```
+
+For a CUDA benchmark, replace `--device cpu` with `--device cuda:0`; its
+portable output directory is `results/resnet50/cuda_0/`. In general, the
+benchmark writes schema-v1 JSON to `results/<model>/<device>/` (normalizing
+`cuda:0` to `cuda_0`); reporting writes the corresponding Markdown comparison
+and Matplotlib plots to `reports/<model>/<device>/`.
+
 ## Stages
 
 1. Design a fair benchmark and inspect hardware.
@@ -363,3 +411,22 @@ WSL2/Linux benchmark target.
 ## TensorFlow scope
 
 TensorFlow is no longer part of the first engine matrix. The initial framework uses PyTorch, ONNX Runtime, and OpenVINO. This keeps the comparison focused on one PyTorch-to-ONNX path and avoids mixing framework-conversion effects with inference-engine effects.
+
+## Limitations
+
+- **Parity is not task accuracy.** The default inputs are deterministic synthetic
+  tensors used to validate export and runner equivalence. They do not measure
+  ImageNet top-1/top-5, COCO mAP, or segmentation mIoU.
+- **Some baselines are deliberately offline and untrained.** Their role is to
+  exercise a reproducible inference contract, not to demonstrate application
+  quality. YOLO uses an official checkpoint, but this benchmark compares its
+  raw pre-NMS output rather than detection post-processing or mAP.
+- **Results are hardware- and version-specific.** CPU architecture, GPU driver,
+  CUDA/cuDNN, framework versions, batch size, and runtime options can all
+  change the outcome. Re-run the saved protocol on the target deployment host
+  before making a production choice.
+- **Current engine coverage is intentional but not exhaustive.** The native C++
+  path covers ONNX Runtime on CPU/CUDA; OpenVINO is currently benchmarked through
+  its Python API on CPU only. The project does not yet measure full interpreter
+  startup, asynchronous serving throughput, preprocessing, NMS, or visual
+  overlays.
