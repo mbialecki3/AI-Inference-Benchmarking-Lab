@@ -109,6 +109,17 @@ class ModelSpecificCliDefaultsTests(unittest.TestCase):
         self.assertEqual(arguments.weights, Path("artifacts/yolo11n.pt"))
         self.assertEqual(arguments.output, Path("artifacts/yolo11n.onnx"))
 
+    def test_second_detector_uses_its_own_registered_artifact_defaults(self) -> None:
+        with patch.object(sys, "argv", ["detection_export", "--model", "yolo11s"]):
+            export_arguments = detection_export._parse_arguments()
+        with patch.object(sys, "argv", ["detection_benchmark", "--model", "yolo11s", "--engine", "onnxruntime"]):
+            benchmark_arguments = detection_benchmark._parse_arguments()
+
+        self.assertEqual(export_arguments.weights, Path("artifacts/yolo11s.pt"))
+        self.assertEqual(export_arguments.output, Path("artifacts/yolo11s.onnx"))
+        self.assertEqual(benchmark_arguments.model_path, Path("artifacts/yolo11s.onnx"))
+        self.assertEqual(benchmark_arguments.output_dir, Path("results/yolo11s/cpu"))
+
     def test_yolo_native_artifact_defaults_use_raw_reference_filename(self) -> None:
         with patch.object(sys, "argv", ["input_artifact", "--model", "yolo11n"]):
             arguments = input_artifact._parse_arguments()
@@ -128,6 +139,19 @@ class ModelSpecificCliDefaultsTests(unittest.TestCase):
         self.assertEqual(export_arguments.output, Path("artifacts/deeplabv3_resnet50.onnx"))
         self.assertEqual(benchmark_arguments.model_path, Path("artifacts/deeplabv3_resnet50.onnx"))
         self.assertEqual(benchmark_arguments.output_dir, Path("results/deeplabv3_resnet50/cuda_0"))
+
+    def test_native_segmentation_artifacts_use_logits_reference_defaults(self) -> None:
+        with patch.object(sys, "argv", ["input_artifact", "--model", "deeplabv3_resnet50"]):
+            arguments = input_artifact._parse_arguments()
+
+        self.assertEqual(
+            arguments.output,
+            Path("artifacts/inputs/deeplabv3_resnet50_seed69420_f32_nchw.bin"),
+        )
+        self.assertEqual(
+            arguments.reference_output,
+            Path("artifacts/reference_outputs/deeplabv3_resnet50_seed67_input69420_f32_logits.bin"),
+        )
 
 
 if __name__ == "__main__":

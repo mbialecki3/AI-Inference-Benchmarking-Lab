@@ -54,6 +54,17 @@ endif()
 
 find_package(Threads REQUIRED)
 
+execute_process(
+    COMMAND git -C "${CMAKE_SOURCE_DIR}" rev-parse HEAD
+    OUTPUT_VARIABLE INFERENCE_BENCH_GIT_REVISION
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+    RESULT_VARIABLE INFERENCE_BENCH_GIT_REVISION_RESULT
+)
+if(NOT INFERENCE_BENCH_GIT_REVISION_RESULT EQUAL 0)
+    set(INFERENCE_BENCH_GIT_REVISION "")
+endif()
+
 add_library(onnxruntime::onnxruntime UNKNOWN IMPORTED GLOBAL)
 set_target_properties(onnxruntime::onnxruntime PROPERTIES
     IMPORTED_LOCATION "${ONNXRUNTIME_LIBRARY}"
@@ -63,6 +74,12 @@ set_target_properties(onnxruntime::onnxruntime PROPERTIES
 function(configure_native_runner target_name)
     target_compile_features(${target_name} PRIVATE cxx_std_20)
     target_link_libraries(${target_name} PRIVATE onnxruntime::onnxruntime Threads::Threads)
+    if(INFERENCE_BENCH_GIT_REVISION)
+        target_compile_definitions(
+            ${target_name}
+            PRIVATE INFERENCE_BENCH_GIT_REVISION=\"${INFERENCE_BENCH_GIT_REVISION}\"
+        )
+    endif()
 
     if(MSVC)
         target_compile_options(${target_name} PRIVATE /W4 /permissive-)

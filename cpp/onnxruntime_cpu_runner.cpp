@@ -54,7 +54,7 @@ constexpr int kDefaultTimedIterations = 20;
 
 [[noreturn]] void fail(const std::string& message);
 
-enum class Task { kClassification, kDetection };
+enum class Task { kClassification, kDetection, kSegmentation };
 
 struct DetectionLayout {
     std::string_view output;
@@ -62,6 +62,12 @@ struct DetectionLayout {
     std::int64_t class_channel_axis;
     std::int64_t candidate_axis;
     std::int64_t class_channel_start;
+    std::int64_t class_count;
+};
+
+struct SegmentationLayout {
+    std::string_view output;
+    std::int64_t class_channel_axis;
     std::int64_t class_count;
 };
 
@@ -73,31 +79,43 @@ struct ModelContract {
     std::span<const std::int64_t> output_shape;
     Task task;
     std::optional<DetectionLayout> detection_layout;
+    std::optional<SegmentationLayout> segmentation_layout;
 };
 
 constexpr std::array<std::int64_t, 4> kClassificationInputShape{1, 3, 224, 224};
 constexpr std::array<std::int64_t, 2> kClassificationOutputShape{1, 1000};
 constexpr std::array<std::int64_t, 4> kYolo11nInputShape{1, 3, 640, 640};
 constexpr std::array<std::int64_t, 3> kYolo11nOutputShape{1, 84, 8400};
+constexpr std::array<std::int64_t, 4> kDeeplabV3Resnet50InputShape{1, 3, 224, 224};
+constexpr std::array<std::int64_t, 4> kDeeplabV3Resnet50OutputShape{1, 21, 224, 224};
 
 const ModelContract& model_contract(std::string_view name) {
     static constexpr ModelContract kResnet50{
         "resnet50", "images", "logits", kClassificationInputShape, kClassificationOutputShape,
-        Task::kClassification, std::nullopt};
+        Task::kClassification, std::nullopt, std::nullopt};
     static constexpr ModelContract kMobilenetV3Large{
         "mobilenet_v3_large", "images", "logits", kClassificationInputShape, kClassificationOutputShape,
-        Task::kClassification, std::nullopt};
+        Task::kClassification, std::nullopt, std::nullopt};
     static constexpr ModelContract kEfficientnetB0{
         "efficientnet_b0", "images", "logits", kClassificationInputShape, kClassificationOutputShape,
-        Task::kClassification, std::nullopt};
+        Task::kClassification, std::nullopt, std::nullopt};
     static constexpr ModelContract kYolo11n{
         "yolo11n", "images", "output0", kYolo11nInputShape, kYolo11nOutputShape, Task::kDetection,
-        DetectionLayout{"raw_pre_nms", 4, 1, 2, 4, 80}};
+        DetectionLayout{"raw_pre_nms", 4, 1, 2, 4, 80}, std::nullopt};
+    static constexpr ModelContract kYolo11s{
+        "yolo11s", "images", "output0", kYolo11nInputShape, kYolo11nOutputShape, Task::kDetection,
+        DetectionLayout{"raw_pre_nms", 4, 1, 2, 4, 80}, std::nullopt};
+    static constexpr ModelContract kDeeplabV3Resnet50{
+        "deeplabv3_resnet50", "images", "logits", kDeeplabV3Resnet50InputShape,
+        kDeeplabV3Resnet50OutputShape, Task::kSegmentation, std::nullopt,
+        SegmentationLayout{"raw_logits", 1, 21}};
     if (name == kResnet50.name) return kResnet50;
     if (name == kMobilenetV3Large.name) return kMobilenetV3Large;
     if (name == kEfficientnetB0.name) return kEfficientnetB0;
     if (name == kYolo11n.name) return kYolo11n;
-    fail("Supported native models: resnet50, mobilenet_v3_large, efficientnet_b0, yolo11n.");
+    if (name == kYolo11s.name) return kYolo11s;
+    if (name == kDeeplabV3Resnet50.name) return kDeeplabV3Resnet50;
+    fail("Supported native models: resnet50, mobilenet_v3_large, efficientnet_b0, yolo11n, yolo11s, deeplabv3_resnet50.");
 }
 
 struct Options {
@@ -135,6 +153,12 @@ constexpr std::string_view kPrimaryProvider = "CUDAExecutionProvider";
 constexpr std::string_view kRunnerExecutable = "onnxruntime_cpu_runner";
 constexpr std::string_view kRunnerDevice = "cpu";
 constexpr std::string_view kPrimaryProvider = "CPUExecutionProvider";
+#endif
+
+#if defined(INFERENCE_BENCH_GIT_REVISION)
+constexpr std::string_view kGitRevision = INFERENCE_BENCH_GIT_REVISION;
+#else
+constexpr std::string_view kGitRevision = "";
 #endif
 
 [[noreturn]] void fail(const std::string& message) {
@@ -179,13 +203,13 @@ std::int64_t parse_int64(std::string_view value, std::string_view option) {
 void print_usage(std::ostream& stream) {
     stream << "Usage: " << kRunnerExecutable << " --input-file PATH [options]\n"
            << "\n"
-           << "Runs a validated classification or raw YOLO11n ONNX artifact with ONNX Runtime's "
+           << "Runs a validated classification, raw detection, or segmentation ONNX artifact with ONNX Runtime's "
            << kPrimaryProvider << ".\n"
            << "The input file must be the float32 NCHW binary emitted by\n"
            << "python -m inference_bench.input_artifact.\n"
            << "\n"
            << "Options:\n"
-           << "  --model NAME         resnet50, mobilenet_v3_large, efficientnet_b0, or yolo11n "
+           << "  --model NAME         resnet50, mobilenet_v3_large, efficientnet_b0, yolo11n, yolo11s, or deeplabv3_resnet50 "
               "(default: resnet50)\n"
            << "  --model-path PATH    ONNX artifact (default: artifacts/<model>.onnx)\n"
            << "  --input-file PATH    Required deterministic float32 input binary\n"
@@ -402,6 +426,31 @@ std::size_t winning_class(
     return winner;
 }
 
+std::size_t winning_segmentation_class(
+    std::span<const float> values,
+    std::span<const std::int64_t> shape,
+    const SegmentationLayout& layout,
+    std::size_t batch_index,
+    std::size_t spatial_index) {
+    if (shape.size() != 4 || layout.class_channel_axis != 1) {
+        fail("The native segmentation contract requires rank-four NCHW logits with class axis 1.");
+    }
+    const auto classes = static_cast<std::size_t>(shape[1]);
+    const auto spatial_elements = static_cast<std::size_t>(shape[2] * shape[3]);
+    if (layout.class_count <= 0 || static_cast<std::size_t>(layout.class_count) > classes) {
+        fail("Segmentation layout does not fit the configured raw output shape.");
+    }
+    const auto batch_offset = batch_index * classes * spatial_elements;
+    std::size_t winner{};
+    for (std::size_t class_index = 1; class_index < static_cast<std::size_t>(layout.class_count); ++class_index) {
+        if (values[batch_offset + class_index * spatial_elements + spatial_index]
+            > values[batch_offset + winner * spatial_elements + spatial_index]) {
+            winner = class_index;
+        }
+    }
+    return winner;
+}
+
 OutputParity compare_outputs(
     std::span<const float> reference, std::span<const float> candidate, const ModelContract& contract) {
     if (reference.size() != candidate.size() || reference.empty()) {
@@ -426,6 +475,26 @@ OutputParity compare_outputs(
     }
     if (contract.task == Task::kClassification) {
         return {max_absolute_error, max_relative_error, reference_index == candidate_index ? 1.0 : 0.0};
+    }
+
+    if (contract.task == Task::kSegmentation) {
+        if (!contract.segmentation_layout) {
+            fail("The segmentation model contract is missing raw-output layout metadata.");
+        }
+        const auto& layout = *contract.segmentation_layout;
+        const auto batches = static_cast<std::size_t>(contract.output_shape[0]);
+        const auto spatial_elements = static_cast<std::size_t>(contract.output_shape[2] * contract.output_shape[3]);
+        std::size_t matching_classes{};
+        for (std::size_t batch = 0; batch < batches; ++batch) {
+            for (std::size_t spatial_index = 0; spatial_index < spatial_elements; ++spatial_index) {
+                if (winning_segmentation_class(reference, contract.output_shape, layout, batch, spatial_index)
+                    == winning_segmentation_class(candidate, contract.output_shape, layout, batch, spatial_index)) {
+                    ++matching_classes;
+                }
+            }
+        }
+        return {max_absolute_error, max_relative_error,
+                static_cast<double>(matching_classes) / static_cast<double>(batches * spatial_elements)};
     }
 
     if (!contract.detection_layout) {
@@ -741,6 +810,15 @@ void write_result(
                   << "      \"candidate_axis\": " << layout.candidate_axis << ",\n"
                   << "      \"class_channel_start\": " << layout.class_channel_start << ",\n"
                   << "      \"class_count\": " << layout.class_count;
+    } else if (contract.task == Task::kSegmentation) {
+        if (!contract.segmentation_layout) {
+            fail("The segmentation model contract is missing raw-output layout metadata.");
+        }
+        const auto& layout = *contract.segmentation_layout;
+        std::cout << ",\n      \"task\": \"semantic_segmentation\",\n"
+                  << "      \"output\": \"" << json_escape(std::string(layout.output)) << "\",\n"
+                  << "      \"class_channel_axis\": " << layout.class_channel_axis << ",\n"
+                  << "      \"class_count\": " << layout.class_count;
     }
     std::cout << ",\n"
               << "      \"output_sum\": ";
@@ -801,6 +879,13 @@ void write_result(
     write_number(std::cout, parity.prediction_agreement);
     std::cout << "}},\n"
               << "  \"environment\": {\n"
+              << "    \"git_revision\": ";
+    if (kGitRevision.empty()) {
+        std::cout << "null";
+    } else {
+        std::cout << "\"" << json_escape(std::string(kGitRevision)) << "\"";
+    }
+    std::cout << ",\n"
               << "    \"onnxruntime\": {\"status\": \"available\", \"version\": \"" << Ort::GetVersionString() << "\"},\n"
               << "    \"native_runner\": {\"status\": \"available\"}"
 #if defined(INFERENCE_BENCH_CUDA_RUNNER)

@@ -13,10 +13,15 @@ from inference_bench.benchmark_result import OutputParity
 
 
 YOLO11N = "yolo11n"
+YOLO11S = "yolo11s"
 YOLO11N_INPUT_SHAPE = (1, 3, 640, 640)
 YOLO11N_OUTPUT_SHAPE = (1, 84, 8400)
 YOLO11N_WEIGHTS = Path("artifacts/yolo11n.pt")
 YOLO11N_ONNX = Path("artifacts/yolo11n.onnx")
+YOLO11S_INPUT_SHAPE = (1, 3, 640, 640)
+YOLO11S_OUTPUT_SHAPE = (1, 84, 8400)
+YOLO11S_WEIGHTS = Path("artifacts/yolo11s.pt")
+YOLO11S_ONNX = Path("artifacts/yolo11s.onnx")
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,7 +97,20 @@ YOLO11N_SPEC = DetectionModelSpec(
     onnx_path=YOLO11N_ONNX,
     layout=YOLO11N_LAYOUT,
 )
-_DETECTION_MODELS = {YOLO11N_SPEC.name: YOLO11N_SPEC}
+YOLO11S_SPEC = DetectionModelSpec(
+    name=YOLO11S,
+    input_name="images",
+    output_name="output0",
+    input_shape=YOLO11S_INPUT_SHAPE,
+    output_shape=YOLO11S_OUTPUT_SHAPE,
+    weights_path=YOLO11S_WEIGHTS,
+    onnx_path=YOLO11S_ONNX,
+    layout=YOLO11N_LAYOUT,
+)
+_DETECTION_MODELS = {
+    YOLO11N_SPEC.name: YOLO11N_SPEC,
+    YOLO11S_SPEC.name: YOLO11S_SPEC,
+}
 
 
 def available_detection_models() -> tuple[str, ...]:
@@ -143,7 +161,7 @@ def load_detection_model(model_name: str, weights: Path | str) -> Any:
             f"{spec.name} weights do not exist: {path}. Download the official checkpoint "
             f"to that path before running this benchmark."
         )
-    if spec.name != YOLO11N:
+    if spec.name not in {YOLO11N, YOLO11S}:
         raise RuntimeError(f"No eager loader is registered for {spec.name}.")
     try:
         from ultralytics import YOLO

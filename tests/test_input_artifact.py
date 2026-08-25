@@ -15,6 +15,11 @@ from inference_bench.input_artifact import (
 )
 from inference_bench.inputs import DEFAULT_INPUT_SEED, make_input
 from inference_bench.pytorch_runner import DEFAULT_MODEL_SEED, run_pytorch
+from inference_bench.segmentation import (
+    DEEPLABV3_RESNET50_INPUT_SHAPE,
+    DEEPLABV3_RESNET50_OUTPUT_SHAPE,
+    make_segmentation_input,
+)
 
 
 class InputArtifactTests(unittest.TestCase):
@@ -104,6 +109,30 @@ class InputArtifactTests(unittest.TestCase):
         self.assertEqual(input_artifact.input_shape, YOLO11N_INPUT_SHAPE)
         self.assertEqual(output_artifact.output_shape, YOLO11N_OUTPUT_SHAPE)
         self.assertIsNone(output_artifact.model_seed)
+
+    def test_segmentation_artifacts_preserve_rank_four_input_and_output_contracts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            input_path = directory / "deeplab_input.bin"
+            output_path = directory / "deeplab_logits.bin"
+            expected_output = np.arange(
+                np.prod(DEEPLABV3_RESNET50_OUTPUT_SHAPE), dtype=np.float32
+            ).reshape(DEEPLABV3_RESNET50_OUTPUT_SHAPE)
+            input_artifact = export_input_artifact("deeplabv3_resnet50", input_path)
+            with patch(
+                "inference_bench.input_artifact.run_segmentation_pytorch",
+                return_value=SimpleNamespace(output=expected_output),
+            ):
+                output_artifact = export_reference_output_artifact("deeplabv3_resnet50", output_path)
+
+            actual_input = np.fromfile(input_path, dtype="<f4").reshape(DEEPLABV3_RESNET50_INPUT_SHAPE)
+            actual_output = np.fromfile(output_path, dtype="<f4").reshape(DEEPLABV3_RESNET50_OUTPUT_SHAPE)
+
+        np.testing.assert_array_equal(actual_input, make_segmentation_input("deeplabv3_resnet50").numpy())
+        np.testing.assert_array_equal(actual_output, expected_output)
+        self.assertEqual(input_artifact.input_shape, DEEPLABV3_RESNET50_INPUT_SHAPE)
+        self.assertEqual(output_artifact.output_shape, DEEPLABV3_RESNET50_OUTPUT_SHAPE)
+        self.assertEqual(output_artifact.model_seed, DEFAULT_MODEL_SEED)
 
 
 if __name__ == "__main__":

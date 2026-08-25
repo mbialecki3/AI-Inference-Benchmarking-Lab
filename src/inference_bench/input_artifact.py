@@ -23,9 +23,18 @@ from inference_bench.detection import (
     make_detection_input,
 )
 from inference_bench.detection_runner import run_detection_pytorch
+from inference_bench.segmentation import (
+    available_segmentation_models,
+    make_segmentation_input,
+)
+from inference_bench.segmentation_runner import run_segmentation_pytorch
 
 
-NATIVE_ARTIFACT_MODELS = (*available_models(), *available_detection_models())
+NATIVE_ARTIFACT_MODELS = (
+    *available_models(),
+    *available_detection_models(),
+    *available_segmentation_models(),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +106,8 @@ def export_input_artifact(
     destination.parent.mkdir(parents=True, exist_ok=True)
     if model_name in available_detection_models():
         tensor = make_detection_input(model_name, batch_size=batch_size, seed=input_seed, device="cpu")
+    elif model_name in available_segmentation_models():
+        tensor = make_segmentation_input(model_name, batch_size=batch_size, seed=input_seed, device="cpu")
     else:
         tensor = make_input(
             model_name,
@@ -148,6 +159,16 @@ def export_reference_output_artifact(
             timed_iterations=1,
         ).output
         reference_model_seed: int | None = None
+    elif model_name in available_segmentation_models():
+        reference_values = run_segmentation_pytorch(
+            model_name,
+            device="cpu",
+            input_seed=input_seed,
+            model_seed=model_seed,
+            warmup_iterations=0,
+            timed_iterations=1,
+        ).output
+        reference_model_seed = model_seed
     else:
         reference_values = run_pytorch(
             model_name,

@@ -12,6 +12,7 @@ import onnx
 
 from inference_bench.detection import (
     YOLO11N,
+    YOLO11S,
     available_detection_models,
     get_detection_model_spec,
     load_detection_model,
@@ -44,7 +45,7 @@ def export_detection_onnx(
     spec = get_detection_model_spec(model_name)
     destination = Path(output_path)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    if spec.name != YOLO11N:
+    if spec.name not in {YOLO11N, YOLO11S}:
         raise RuntimeError(f"No ONNX exporter is registered for {spec.name}.")
     exported = Path(
         load_detection_model(spec.name, weights).export(

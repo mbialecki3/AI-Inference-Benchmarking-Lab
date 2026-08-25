@@ -11,7 +11,7 @@ Measure how deployment choices affect practical computer-vision models. Every en
 | Classification | ResNet-50 | Conventional high-compute convolutional baseline. |
 | Classification | MobileNetV3-Large | Mobile-oriented, low-latency baseline. |
 | Classification | EfficientNet-B0 | Compound-scaled classification design. |
-| Object detection | YOLO11n | Practical low-overhead detector with post-processing costs. |
+| Object detection | YOLO11n, YOLO11s | Small and compact detector baselines sharing one raw-output contract. |
 | Semantic segmentation | DeepLabV3-ResNet50 | Dense prediction with a different memory and output profile. |
 
 The first implementation uses the smallest practical variants. Larger variants are configurations, not new framework code.
@@ -30,7 +30,7 @@ YOLO11 is deliberately pinned rather than silently tracking the newest YOLO fami
 
 OpenCV is shared preprocessing and image I/O. It will also provide visual overlays for detector and segmentation sanity checks. OpenCV DNN can become an additional runner later, but is not conflated with ONNX Runtime or OpenVINO.
 
-YOLO11n begins in a separate detection pipeline. It uses a static `float32`
+YOLO11n and YOLO11s use a separate detection pipeline. They use a static `float32`
 `[1,3,640,640]` input and compares raw pre-NMS output tensors, where the first
 four channels encode boxes and later channels encode COCO class scores. This
 keeps engine parity distinct from NMS policy, image preprocessing, and COCO mAP.
@@ -47,9 +47,8 @@ DeepLabV3-ResNet50 is a dedicated segmentation path with static float32
 uses the argmax across the class channel at every pixel; it validates engine
 equivalence but is not semantic-segmentation mIoU. The Python matrix covers
 PyTorch eager and ONNX Runtime on CPU/CUDA plus OpenVINO CPU with an explicit
-float32 hint. Native C++ ONNX Runtime has not yet implemented the rank-four
-segmentation output contract, so reports must show that engine as absent rather
-than implying native coverage.
+float32 hint. The native C++ ONNX Runtime runner also validates the rank-four
+raw-logit contract and measures its CPU/CUDA path.
 
 ## CUDA compatibility contract
 
@@ -105,10 +104,11 @@ level task accuracy.
 
 The native ONNX Runtime CPU and CUDA runners read the same ONNX artifacts and
 support the ResNet-50, MobileNetV3-Large, and EfficientNet-B0 classification
-contracts plus YOLO11n. Classification validates `images`/`logits`, float32,
-and static `[1,3,224,224]`/`[1,1000]`; YOLO11n validates `images`/`output0`,
-float32, and static `[1,3,640,640]`/`[1,84,8400]`. DeepLabV3's rank-four raw
-logits are not yet a native C++ contract. To preserve exact
+contracts, YOLO11n and YOLO11s raw detection, and DeepLabV3-ResNet50 semantic
+segmentation. Classification validates `images`/`logits`, float32, and static
+`[1,3,224,224]`/`[1,1000]`; the YOLO11 models validate `images`/`output0`,
+float32, and static `[1,3,640,640]`/`[1,84,8400]`; DeepLab validates
+`images`/`logits`, float32, and static `[1,3,224,224]`/`[1,21,224,224]`. To preserve exact
 cross-language inputs, Python writes its seeded tensor as a little-endian
 float32 binary artifact; C++ reads those bytes rather than attempting to
 reproduce PyTorch's random-number generator. This input artifact is synthetic
@@ -119,7 +119,7 @@ Native C++ CPU and CUDA output are schema-versioned JSON with the same `runner`,
 sections. It records raw latency samples and the same interpolated p50/p95/p99
 calculation. Python also saves the matching seeded PyTorch CPU output as a
 little-endian float32 artifact. Native runners load it and record maximum
-absolute error, maximum relative error, and prediction agreement. For YOLO11n,
+absolute error, maximum relative error, and prediction agreement. For the YOLO11 models,
 the C++ runner calculates agreement over the highest-scoring class among
 channels 4--83 at each of the 8,400 locations, and emits `model_seed: null` to
 match the pretrained Python records. This is intentionally not represented as
@@ -131,7 +131,8 @@ and samples `nvidia-smi` before and after the timed loop. The C++ SDK and a
 matching GPU-enabled ONNX Runtime distribution are separate inputs because the
 provider is a dynamically loaded plug-in. CMake keeps the required loader
 symlinks in the ignored build tree rather than copying or modifying vendor
-libraries.
+libraries. CMake embeds the resolved source Git revision in each native result;
+when Git is unavailable at configure time the field is explicitly `null`.
 
 ### Comparison reporting
 

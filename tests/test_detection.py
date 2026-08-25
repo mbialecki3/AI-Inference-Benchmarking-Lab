@@ -10,6 +10,8 @@ from inference_bench.detection import (
     YOLO11N_INPUT_SHAPE,
     YOLO11N_LAYOUT,
     YOLO11N_OUTPUT_SHAPE,
+    YOLO11S_INPUT_SHAPE,
+    YOLO11S_OUTPUT_SHAPE,
     available_detection_models,
     compare_detection_outputs,
     get_detection_model_spec,
@@ -22,9 +24,16 @@ class DetectionContractTests(unittest.TestCase):
     def test_yolo11n_is_registered_through_the_generic_detection_contract(self) -> None:
         spec = get_detection_model_spec("yolo11n")
 
-        self.assertEqual(available_detection_models(), ("yolo11n",))
+        self.assertEqual(available_detection_models(), ("yolo11n", "yolo11s"))
         self.assertEqual(spec.input_shape, YOLO11N_INPUT_SHAPE)
         self.assertEqual(spec.output_shape, YOLO11N_OUTPUT_SHAPE)
+        self.assertEqual(spec.layout, YOLO11N_LAYOUT)
+
+    def test_yolo11s_reuses_the_explicit_static_raw_detection_contract(self) -> None:
+        spec = get_detection_model_spec("yolo11s")
+
+        self.assertEqual(spec.input_shape, YOLO11S_INPUT_SHAPE)
+        self.assertEqual(spec.output_shape, YOLO11S_OUTPUT_SHAPE)
         self.assertEqual(spec.layout, YOLO11N_LAYOUT)
 
     def test_seeded_detection_input_is_repeatable_and_640_square(self) -> None:

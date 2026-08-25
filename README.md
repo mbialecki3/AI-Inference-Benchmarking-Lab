@@ -38,8 +38,9 @@ name and use a model-specific default ONNX and reference-output path.
 ## Native ONNX Runtime C++ CPU and CUDA
 
 The native ONNX Runtime CPU and CUDA runners share one C++ implementation and
-CMake pattern. They support the classification `images` → `logits` contract and
-the raw YOLO11n `images` → `output0` contract. Each uses the existing warm-run
+CMake pattern. They support classification `images` → `logits`, raw YOLO11n and
+YOLO11s `images` → `output0`, and DeepLabV3-ResNet50 `images` → `logits`
+contracts. Each uses the existing warm-run
 protocol (5 warmups and 20 timed synchronous requests by default), validates
 the exact float32 static shapes, and emits schema-v1 measurement sections used
 by the Python benchmark records. The artifact command also saves deterministic
@@ -118,9 +119,9 @@ provider libraries; it does not copy vendor binaries into the repository or
 modify the Conda environment. The CPU target remains separately buildable on
 hosts without CUDA.
 
-## YOLO11n detection baseline
+## YOLO11 detection baselines
 
-YOLO11n is a separate detection path: it uses a static `float32 NCHW
+YOLO11n and YOLO11s use a separate detection path: they use a static `float32 NCHW
 [1,3,640,640]` input and preserves the model's raw pre-NMS tensor. Its parity
 check reports numerical error plus per-candidate winning-class agreement; it is
 not COCO mAP and it does not benchmark post-processing. Each record stores its
@@ -132,10 +133,12 @@ explicit float32 inference hint, and native C++ ONNX Runtime on CPU/CUDA.
 
 Detection entry points are model-generic: pass `--model` to
 `inference_bench.detection_export` and `inference_bench.detection_benchmark`.
-YOLO11n is the first registered detector; adding the next detector means adding
-one explicit static contract to the registry rather than another runner stack.
+YOLO11n and YOLO11s are registered with independent checkpoint and ONNX paths;
+both use the same static COCO raw-output layout. Adding another detector means
+adding one explicit static contract to the registry rather than another runner stack.
 
-Place the official `yolo11n.pt` checkpoint at `artifacts/yolo11n.pt`, then
+Place an official YOLO11 checkpoint such as `yolo11n.pt` or `yolo11s.pt` in
+`artifacts/`, then
 export the static ONNX artifact and record a CUDA ONNX Runtime run:
 
 ```bash
@@ -190,9 +193,19 @@ PYTHONPATH=src python -m inference_bench.segmentation_benchmark \
 ```
 
 OpenVINO remains CPU-only in this environment, so it is intentionally excluded
-from CUDA comparisons. Native C++ ONNX Runtime currently supports classification
-and YOLO11n only; rank-four DeepLab logits are a visible reporting coverage gap,
-not a fabricated native result.
+from CUDA comparisons. Native C++ ONNX Runtime supports DeepLab's rank-four
+raw-logit contract on CPU and CUDA. Create matching input and reference-output
+artifacts before running it:
+
+```bash
+PYTHONPATH=src python -m inference_bench.input_artifact --model deeplabv3_resnet50
+mkdir -p results/deeplabv3_resnet50/cpu
+./build/cpp/cpp/onnxruntime_cpu_runner \
+  --model deeplabv3_resnet50 \
+  --input-file artifacts/inputs/deeplabv3_resnet50_seed69420_f32_nchw.bin \
+  --reference-output artifacts/reference_outputs/deeplabv3_resnet50_seed67_input69420_f32_logits.bin \
+  > results/deeplabv3_resnet50/cpu/onnxruntime_cpp_cpu.json
+```
 
 ## Python OpenVINO CPU milestone
 
@@ -281,7 +294,9 @@ mkdir -p results/resnet50/cpu
 ```
 
 The coverage section makes missing or protocol-incompatible engines explicit;
-it never fabricates a C++ result when one has not been recorded.
+it never fabricates a C++ result when one has not been recorded. Native records
+also embed the Git revision collected at CMake configure time, matching the
+source-provenance field in Python records.
 
 ## Tests
 
